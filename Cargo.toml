@@ -10,7 +10,7 @@ keywords = ["runit", "void", "void-linux"]
 categories = ["command-line-utilities"]
 
 [dependencies]
-anyhow = "1.0.55"
+anyhow = "1.0.100"
 clap = { version = "4.5.53", features = ["cargo", "derive"] }
 dirs = "4.0.0"
 libc = "0.2.119"
