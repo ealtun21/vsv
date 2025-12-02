@@ -15,9 +15,9 @@
 use std::env;
 use std::ffi::OsString;
 use std::fmt;
-use std::path::PathBuf;
 use std::io;
 use std::io::IsTerminal;
+use std::path::PathBuf;
 
 use anyhow::{bail, Context, Result};
 
@@ -81,7 +81,7 @@ pub struct Config {
     // CLI options only
     pub tree: bool,
     pub log: bool,
-    pub verbose: usize,
+    pub verbose: u8,
     pub operands: Vec<String>,
     pub mode: ProgramMode,
 }
