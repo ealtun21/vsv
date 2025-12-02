@@ -18,7 +18,7 @@ use crate::{utils, utils::verbose};
 /// Handle `vsv status` or `vsv` without a subcommand given.
 pub fn do_status(cfg: &Config) -> Result<()> {
     // may or may not be set (option)
-    let filter = cfg.operands.get(0);
+    let filter = cfg.operands.first();
 
     // find all services
     let services = runit::get_services(&cfg.svdir, cfg.log, filter)
