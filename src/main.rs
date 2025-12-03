@@ -16,6 +16,9 @@ use std::fs;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
+use clap::{Command, CommandFactory};
+use clap::builder::{PossibleValue, PossibleValuesParser};
+use clap_complete::env::CompleteEnv;
 use yansi::Paint;
 
 mod arguments;
@@ -31,12 +34,105 @@ use config::Config;
 use die::die;
 use utils::verbose;
 
+/// Construct the Clap Command with dynamic completions attached.
+/// This runs every time the shell requests completions.
+fn build_cli_with_completions() -> Command {
+    let mut cmd = arguments::Args::command();
+
+    // 1. Fetch dynamic values
+    let running_services = utils::get_running_services();
+    let avail_services = utils::get_avail_services();
+
+    // 2. Attach running services to standard commands (using "services" argument)
+    let running_svc_cmds = [
+        "start", "stop", "restart", "reload", "once", "pause", 
+        "cont", "hup", "alarm", "interrupt", "quit", "term", "kill", 
+        "exit", "remove", "enable", "disable"
+    ];
+
+    for sub_name in running_svc_cmds {
+        // Clone the services list for this subcommand closure
+        let values = running_services.clone();
+        
+        // We use `move` to transfer ownership of `values` into the closure
+        cmd = cmd.mut_subcommand(sub_name, move |sub| {
+            sub.mut_arg("services", move |arg| {
+                // Fix: explicit map to PossibleValue with leaked static lifetime
+                let vals = values.iter().map(|s| {
+                    let static_str: &'static str = Box::leak(s.clone().into_boxed_str());
+                    PossibleValue::new(static_str)
+                });
+                arg.value_parser(PossibleValuesParser::new(vals))
+            })
+        });
+    }
+
+    // 3. Attach running services to Log command (uses "service" singular argument)
+    {
+        let values = running_services.clone();
+        cmd = cmd.mut_subcommand("log", move |sub| {
+            sub.mut_arg("service", move |arg| {
+                let vals = values.iter().map(|s| {
+                    let static_str: &'static str = Box::leak(s.clone().into_boxed_str());
+                    PossibleValue::new(static_str)
+                });
+                arg.value_parser(PossibleValuesParser::new(vals))
+            })
+        });
+    }
+
+    // 4. Attach available services to Add command
+    {
+        let values = avail_services.clone();
+        cmd = cmd.mut_subcommand("add", move |sub| {
+            sub.mut_arg("services", move |arg| {
+                let vals = values.iter().map(|s| {
+                    let static_str: &'static str = Box::leak(s.clone().into_boxed_str());
+                    PossibleValue::new(static_str)
+                });
+                arg.value_parser(PossibleValuesParser::new(vals))
+            })
+        });
+    }
+    
+    cmd
+}
+
 fn do_main() -> Result<()> {
     // disable color until we absolutely know we want it
     yansi::disable();
 
-    // parse CLI options + env vars
+    // 1. Handle Dynamic Completion
+    // If the shell is asking for completions (e.g. COMPLETE=bash is set),
+    // this will run the completion logic, print results, and EXIT the process.
+    CompleteEnv::with_factory(build_cli_with_completions).complete();
+
+    // 2. Normal Execution
     let args = arguments::parse();
+
+    // Handle the "Completions" command specifically to print the setup instructions
+    if let Some(Commands::Completions { shell }) = &args.command {
+        let bin_name = env!("CARGO_PKG_NAME");
+        let shell_name = shell.to_string();
+        
+        match shell {
+            clap_complete::Shell::Bash => {
+                println!("source <(COMPLETE=bash {})", bin_name);
+            }
+            clap_complete::Shell::Zsh => {
+                println!("source <(COMPLETE=zsh {})", bin_name);
+            }
+            clap_complete::Shell::Fish => {
+                println!("COMPLETE=fish {} | source", bin_name);
+            }
+            _ => {
+                println!("# Dynamic completion not fully tested for {}. Try:", shell_name);
+                println!("source <(COMPLETE={} {})", shell_name, bin_name);
+            }
+        }
+        return Ok(());
+    }
+
     let cfg =
         Config::from_args(&args).context("failed to parse args into config")?;
 
@@ -66,11 +162,9 @@ fn do_main() -> Result<()> {
             Commands::Disable { .. } => {
                 commands::enable_disable::do_disable(&cfg)
             }
-            // --- NEW COMMANDS START ---
             Commands::Add { .. } => commands::add_remove::do_add(&cfg),
             Commands::Remove { .. } => commands::add_remove::do_remove(&cfg),
             Commands::Avail => commands::add_remove::do_avail(&cfg),
-            // --- NEW COMMANDS END ---
             Commands::Log { service, lines, all } => {
                 // Log command logic
                 let svdir_log = cfg.svdir.join(service).join("log");
@@ -106,14 +200,11 @@ fn do_main() -> Result<()> {
                 }
 
                 // 2. Try to deduce if it uses syslog/vlogger
-                // We check the 'run' script in the log directory
                 let log_run = svdir_log.join("run");
                 if log_run.exists() {
                     if let Ok(content) = fs::read_to_string(&log_run) {
-                        // Look for "-t TAG" or just assume service name if vlogger is used
                         let mut tag = String::new();
 
-                        // Simple parser for "vlogger -t tag" or "logger -t tag"
                         for line in content.lines() {
                             if line.contains("vlogger")
                                 || line.contains("logger")
@@ -126,7 +217,6 @@ fn do_main() -> Result<()> {
                                         break;
                                     }
                                 }
-                                // If found vlogger but no tag, default to service name
                                 if tag.is_empty() && line.contains("vlogger") {
                                     tag = service.to_string();
                                 }
@@ -134,8 +224,6 @@ fn do_main() -> Result<()> {
                         }
 
                         if !tag.is_empty() {
-                            // We found a tag, now look for a system log file
-                            // Priority: Void socklog -> Standard syslog -> Messages
                             let syslogs = [
                                 "/var/log/socklog/everything/current",
                                 "/var/log/syslog",
@@ -175,7 +263,7 @@ fn do_main() -> Result<()> {
                 println!("Check /var/log/socklog/, /var/log/syslog, or use 'logread'.");
                 Ok(())
             }
-            // Pass all other commands to the control handler
+            Commands::Completions { .. } => Ok(()), // Handled above
             _ => commands::control::run(&cfg, cmd),
         }
     } else {

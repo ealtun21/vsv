@@ -9,6 +9,7 @@
 use std::path;
 
 use clap::{Parser, Subcommand};
+use clap_complete::Shell;
 
 #[derive(Debug, Parser)]
 #[clap(author, version, about, verbatim_doc_comment, long_about = None)]
@@ -133,6 +134,13 @@ pub enum Commands {
 
     /// Exit the service immediately.
     Exit { services: Vec<String> },
+
+    /// Generate shell completions.
+    Completions {
+        /// The shell to generate the completions for.
+        #[clap(value_enum)]
+        shell: Shell,
+    },
 }
 
 pub fn parse() -> Args {

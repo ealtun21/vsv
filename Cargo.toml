@@ -16,9 +16,10 @@ dirs = "6.0.0"
 libc = "0.2.178"
 rayon = "1.11.0"
 yansi = "1.0.1"
+clap_complete = { version = "4.5.61", features = ["unstable-dynamic"] }
 
 [dev-dependencies]
-assert_cmd = "2.0.4"
+assert_cmd = "2.1.1"
 
 [profile.release]
 opt-level = "z"     # Optimize for size.

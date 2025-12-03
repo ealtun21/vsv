@@ -8,15 +8,18 @@
 
 use libc::pid_t;
 use std::collections::{HashMap, HashSet};
+use std::ffi::OsStr;
 use std::fs;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use yansi::{Paint, Style};
+
+use crate::config;
 
 /**
  * A `println!()`-like macro that will only print if `-v` is set.
@@ -46,61 +49,41 @@ pub fn format_status_line<T: AsRef<str>>(
 ) -> String {
     // ( data + style to print, max width, suffix )
     let data = [
-        (status_char, 1, ""),
-        (name, 20, "..."),
-        (state, 7, "..."),
-        (enabled, 9, "..."),
-        (pid, 8, "..."),
-        (command, 17, "..."),
-        (time, 14, "..."),
-        (log, 0, "..."),
+        (status_char.0.as_ref(), status_char.1, 1, ""),
+        (name.0.as_ref(), name.1, 20, ""),
+        (state.0.as_ref(), state.1, 7, ""),
+        (enabled.0.as_ref(), enabled.1, 9, ""),
+        (pid.0.as_ref(), pid.1, 8, ""),
+        (command.0.as_ref(), command.1, 17, ""),
+        (time.0.as_ref(), time.1, 9, ""),
+        (log.0.as_ref(), log.1, 7, ""),
     ];
 
     let mut line = String::new();
 
-    for (i, (field, max_width, suffix)) in data.iter().enumerate() {
-        let (text, style) = field;
-        let text = text.as_ref();
+    for (i, (s, style, width, suffix)) in data.iter().enumerate() {
+        let mut s = s.to_string();
 
-        let char_count = text.chars().count();
-        let suffix_len = suffix.chars().count();
-
-        // Truncate logic: ensure the resulting string (including suffix)
-        // fits within max_width to maintain alignment.
-        let s = if *max_width > 0 {
-            if char_count > *max_width {
-                // Calculate how much text we can keep
-                let limit = if *max_width > suffix_len {
-                    *max_width - suffix_len
-                } else {
-                    0
-                };
-
-                let mut s: String = text.chars().take(limit).collect();
-                s.push_str(suffix);
-                s
-            } else {
-                String::from(text)
-            }
-        } else {
-            String::from(text)
-        };
-
-        // don't paint spaces
-        line.push_str(&s.paint(*style).to_string());
-
-        // spacing
-        if i < data.len() - 1 {
-            // Calculate padding based on the formatted string 's'
-            let width =
-                if *max_width > 0 { *max_width } else { s.chars().count() };
-            let current_len = s.chars().count();
-            let pad = if width > current_len { width - current_len } else { 0 };
-
-            // Use +2 spacing to match the original vsv look and separate columns clearly
-            let spacing = " ".repeat(pad + 2);
-            line.push_str(&spacing);
+        // truncate long strings
+        if s.len() > *width {
+            s.truncate(*width);
         }
+
+        // construct the string with the style
+        let s = s.paint(*style).to_string();
+
+        // calculate the padding
+        let padding = width - s.len() + (s.len() - s.chars().count());
+
+        // append to the line
+        if i == 0 {
+            line.push_str(&s);
+        } else {
+            line.push_str(&format!("{:>width$}", s, width = padding + s.len()));
+        }
+
+        // append the suffix
+        line.push_str(suffix);
     }
 
     line
@@ -361,47 +344,22 @@ fn get_tail_content(
     Ok((file, String::from_utf8_lossy(&buf).to_string()))
 }
 
-/// Follow a file (tail -f) and print to stdout.
-pub fn follow_file(path: &Path, n_lines: usize, read_all: bool) -> Result<()> {
-    let (mut file, content) = get_tail_content(path, n_lines, read_all)?;
-    let lines: Vec<&str> = content.lines().collect();
-
-    // If not reading all, only show the last N lines
-    let start_line = if !read_all && lines.len() > n_lines {
-        lines.len() - n_lines
-    } else {
-        0
-    };
-
-    for line in &lines[start_line..] {
-        println!("{}", line);
-    }
-
-    // Follow
-    let mut pos = file.seek(SeekFrom::End(0))?;
-    let mut buffer = [0; 1024];
-
-    loop {
-        let read_bytes = file.read(&mut buffer)?;
-        if read_bytes > 0 {
-            print!("{}", String::from_utf8_lossy(&buffer[..read_bytes]));
-            pos += read_bytes as u64;
-        } else {
-            if let Ok(meta) = fs::metadata(path) {
-                if meta.len() < pos {
-                    // Truncated
-                    pos = 0;
-                    file = File::open(path)?;
-                    file.seek(SeekFrom::Start(0))?;
-                    println!("\n*** Log rotated ***\n");
-                }
-            }
-            thread::sleep(Duration::from_millis(100));
-        }
-    }
+/**
+ * Tail a file and print the lines to stdout.
+ *
+ * This function will run forever until interrupted.
+ */
+pub fn follow_file(
+    path: &Path,
+    n_lines: usize,
+    read_all: bool,
+) -> Result<()> {
+    follow_file_filtered(path, "", n_lines, read_all)
 }
 
-/// Follow a file (tail -f) but only print lines containing `filter_str`.
+/**
+ * Tail a file and print the lines to stdout, filtered by a string.
+ */
 pub fn follow_file_filtered(
     path: &Path,
     filter_str: &str,
@@ -410,9 +368,10 @@ pub fn follow_file_filtered(
 ) -> Result<()> {
     let (mut file, content) = get_tail_content(path, n_lines, read_all)?;
 
-    // Scan existing content for the filter
+    let lines: Vec<&str> = content.lines().collect();
     let mut matching_lines = Vec::new();
-    for line in content.lines() {
+
+    for line in lines {
         if line.contains(filter_str) {
             matching_lines.push(line);
         }
@@ -456,11 +415,58 @@ pub fn follow_file_filtered(
                     pos = 0;
                     file = File::open(path)?;
                     file.seek(SeekFrom::Start(0))?;
-                    partial_line.truncate(0); // Fixed deprecated clear() call
-                    println!("\n*** Log rotated ***\n");
+                    partial_line.truncate(0); 
+                    println!("\n*** Log truncated ***\n");
                 }
             }
             thread::sleep(Duration::from_millis(100));
         }
     }
+}
+
+/**
+ * Get a list of service names in a directory.
+ * Used for dynamic autocompletion.
+ */
+pub fn get_service_names(dir: &Path) -> Vec<String> {
+    let mut names = Vec::new();
+
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            // We only care about directories or symlinks to directories
+            if path.is_dir() || path.is_symlink() {
+                if let Some(name) = path.file_name().and_then(OsStr::to_str) {
+                    if !name.starts_with('.') {
+                        names.push(name.to_string());
+                    }
+                }
+            }
+        }
+    }
+    
+    names.sort();
+    names
+}
+
+/**
+ * Get available services from default locations.
+ * Uses SVDIR env var or defaults.
+ */
+pub fn get_running_services() -> Vec<String> {
+    let svdir = std::env::var_os(config::ENV_SVDIR)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(config::DEFAULT_SVDIR));
+    
+    get_service_names(&svdir)
+}
+
+/**
+ * Get available services from /etc/sv (or default avail dir).
+ */
+pub fn get_avail_services() -> Vec<String> {
+    // Note: We don't have a specific env var for AVAIL_DIR in standard vsv,
+    // but config.rs defines it. We'll use the constant default here for completion.
+    let avail_dir = PathBuf::from(config::DEFAULT_AVAIL_DIR);
+    get_service_names(&avail_dir)
 }
