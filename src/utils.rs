@@ -11,11 +11,11 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::thread;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use yansi::{Paint, Style};
 
 /**
@@ -292,13 +292,20 @@ fn build_tree_recursive(
     }
 }
 
-/// Helper: seek to end minus 4KB, read content, return file handle and content.
-fn get_tail_content(path: &Path) -> Result<(File, String)> {
+/// Helper: seek to end minus estimated size (or 0 if reading all), read content.
+fn get_tail_content(path: &Path, n_lines: usize, read_all: bool) -> Result<(File, String)> {
     let mut file = File::open(path).with_context(|| format!("failed to open log file {:?}", path))?;
 
     let file_len = file.metadata()?.len();
-    let initial_read_size = 8192; // 8KB context
-    let start_pos = if file_len > initial_read_size {
+    
+    // Estimate bytes needed: avg 200 bytes per line + standard buffer
+    let estimated_bytes = (n_lines as u64) * 200;
+    let initial_read_size = std::cmp::max(8192, estimated_bytes);
+
+    // If reading all, start at 0. Else, try to be smart.
+    let start_pos = if read_all {
+        0
+    } else if file_len > initial_read_size {
         file_len - initial_read_size
     } else {
         0
@@ -312,12 +319,17 @@ fn get_tail_content(path: &Path) -> Result<(File, String)> {
 }
 
 /// Follow a file (tail -f) and print to stdout.
-pub fn follow_file(path: &Path) -> Result<()> {
-    let (mut file, content) = get_tail_content(path)?;
+pub fn follow_file(path: &Path, n_lines: usize, read_all: bool) -> Result<()> {
+    let (mut file, content) = get_tail_content(path, n_lines, read_all)?;
     let lines: Vec<&str> = content.lines().collect();
     
-    // Show last 10 lines
-    let start_line = if lines.len() > 10 { lines.len() - 10 } else { 0 };
+    // If not reading all, only show the last N lines
+    let start_line = if !read_all && lines.len() > n_lines { 
+        lines.len() - n_lines 
+    } else { 
+        0 
+    };
+
     for line in &lines[start_line..] {
         println!("{}", line);
     }
@@ -347,14 +359,25 @@ pub fn follow_file(path: &Path) -> Result<()> {
 }
 
 /// Follow a file (tail -f) but only print lines containing `filter_str`.
-pub fn follow_file_filtered(path: &Path, filter_str: &str) -> Result<()> {
-    let (mut file, content) = get_tail_content(path)?;
+pub fn follow_file_filtered(path: &Path, filter_str: &str, n_lines: usize, read_all: bool) -> Result<()> {
+    let (mut file, content) = get_tail_content(path, n_lines, read_all)?;
     
     // Scan existing content for the filter
+    let mut matching_lines = Vec::new();
     for line in content.lines() {
         if line.contains(filter_str) {
-            println!("{}", line);
+            matching_lines.push(line);
         }
+    }
+
+    let start_line = if !read_all && matching_lines.len() > n_lines { 
+        matching_lines.len() - n_lines 
+    } else { 
+        0 
+    };
+
+    for line in &matching_lines[start_line..] {
+        println!("{}", line);
     }
 
     // Follow
@@ -385,7 +408,7 @@ pub fn follow_file_filtered(path: &Path, filter_str: &str) -> Result<()> {
                     pos = 0;
                     file = File::open(path)?;
                     file.seek(SeekFrom::Start(0))?;
-                    partial_line.clear();
+                    partial_line.truncate(0); // Fixed deprecated clear() call
                     println!("\n*** Log rotated ***\n");
                 }
             }

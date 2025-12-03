@@ -94,7 +94,8 @@ impl Config {
                     operands = services.to_vec();
                     ProgramMode::Disable
                 }
-                Commands::Log { service, args: _ } => {
+                Commands::Log { service, .. } => {
+                    // .. ignores lines and all, they are handled in main.rs
                     operands = vec![service.to_string()];
                     ProgramMode::Log
                 }
@@ -123,12 +124,14 @@ impl Config {
                 }
             }
         } else {
-            // Default to Status if no subcommand is given
+            if let Some(filter) = &args.filter {
+                operands = vec![filter.to_string()];
+            }
             ProgramMode::Status
         };
 
         let colorize = should_colorize_output(&args.color)?;
-        let verbose = args.verbose as usize;
+        let verbose = args.verbose;
         let proc_path = env::var_os(ENV_PROC_DIR)
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(DEFAULT_PROC_DIR));

@@ -13,7 +13,7 @@
 #![allow(clippy::uninlined_format_args)]
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use yansi::Paint;
@@ -66,15 +66,25 @@ fn do_main() -> Result<()> {
             Commands::Disable { .. } => {
                 commands::enable_disable::do_disable(&cfg)
             }
-            Commands::Log { service, args: _ } => {
+            Commands::Log { service, lines, all } => {
                 // Log command logic
                 let svdir_log = cfg.svdir.join(service).join("log");
                 let log_current = svdir_log.join("current");
                 
+                let num_lines = lines.unwrap_or(10);
+                // "all" overrides lines
+                let (lines_to_show, read_all) = if *all {
+                    (0, true) // lines ignored if read_all
+                } else {
+                    (num_lines, false)
+                };
+
+                let desc = if read_all { "all".to_string() } else { num_lines.to_string() };
+
                 // 1. Try standard runit log/current
                 if log_current.exists() {
-                     println!("{} {}...", "viewing log for".green(), service.bold());
-                     return utils::follow_file(&log_current);
+                     println!("{} {} ({} lines)...", "viewing log for".green(), service.bold(), desc);
+                     return utils::follow_file(&log_current, lines_to_show, read_all);
                 }
 
                 // 2. Try to deduce if it uses syslog/vlogger
@@ -114,12 +124,13 @@ fn do_main() -> Result<()> {
                             for sys_log_path_str in syslogs {
                                 let p = PathBuf::from(sys_log_path_str);
                                 if p.exists() {
-                                    println!("{} {} in {}...", 
+                                    println!("{} {} in {} ({} lines)...", 
                                         "viewing syslog for tag".green(), 
                                         tag.bold(),
-                                        sys_log_path_str.dim());
+                                        sys_log_path_str.dim(),
+                                        desc);
                                     
-                                    return utils::follow_file_filtered(&p, &tag);
+                                    return utils::follow_file_filtered(&p, &tag, lines_to_show, read_all);
                                 }
                             }
                         }

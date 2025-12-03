@@ -8,7 +8,7 @@
 
 use std::path;
 
-use clap::{ArgAction, Parser, Subcommand};
+use clap::{Parser, Subcommand};
 
 #[derive(Debug, Parser)]
 #[clap(author, version, about, verbatim_doc_comment, long_about = None)]
@@ -20,7 +20,8 @@ use clap::{ArgAction, Parser, Subcommand};
     Manage and view runit services
     Made specifically for Void Linux but should work anywhere
     Author: Dave Eddy <dave@daveeddy.com> (bahamas10)")]
-#[clap(after_help = "All commands are implemented natively in Rust.
+#[clap(
+    after_help = "All commands are implemented natively in Rust.
 Common subcommands:
 
     start <service>           Start the service
@@ -28,7 +29,8 @@ Common subcommands:
     restart <service>         Restart the service
     reload <service>          Reload the service (send SIGHUP)
     log <service>             View service logs (tail -f)
-")]
+"
+)]
 pub struct Args {
     /// Enable or disable color output.
     #[clap(short, long, value_name = "yes|no|auto")]
@@ -38,38 +40,40 @@ pub struct Args {
     #[clap(short, long, value_parser, value_name = "dir")]
     pub dir: Option<path::PathBuf>,
 
-    /// Show log processes, this is a shortcut for `status -l`.
-    #[clap(short, long)]
-    pub log: bool,
+    /// Turn on verbose output.
+    #[clap(short, long, action = clap::ArgAction::Count)]
+    pub verbose: usize,
 
-    /// Tree view, this is a shortcut for `status -t`.
+    /// Turn on tree output.
     #[clap(short, long)]
     pub tree: bool,
 
-    /// User mode, this is a shortcut for `-d ~/runit/service`.
+    /// Show log status (in status mode).
+    #[clap(short, long)]
+    pub log: bool,
+
+    /// Run in user mode (SVDIR = ~/runit/service).
     #[clap(short, long)]
     pub user: bool,
 
-    /// Increase Verbosity.
-    #[clap(short, long, action = ArgAction::Count)]
-    pub verbose: u8,
+    /// Filter services by name (legacy argument).
+    pub filter: Option<String>,
 
-    /// Subcommand.
     #[clap(subcommand)]
     pub command: Option<Commands>,
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Subcommand, PartialEq, Debug)]
 pub enum Commands {
     /// Show process status.
     Status {
-        /// Show associated log processes.
-        #[clap(short, long)]
-        log: bool,
-
         /// Tree view (calls pstree(1) on PIDs found).
         #[clap(short, long)]
         tree: bool,
+
+        /// Show log status.
+        #[clap(short, long)]
+        log: bool,
 
         filter: Vec<String>,
     },
@@ -95,9 +99,14 @@ pub enum Commands {
     /// View service log (tail -f).
     Log {
         service: String,
-        /// Arguments passed to tail (e.g. -n 100)
-        #[clap(allow_hyphen_values = true)]
-        args: Vec<String>,
+
+        /// Number of lines to show (default: 10).
+        #[clap(short = 'n', long)]
+        lines: Option<usize>,
+
+        /// Show the whole file (start from beginning).
+        #[clap(short = 'a', long, conflicts_with = "lines")]
+        all: bool,
     },
 
     /// Start if service is not running. Do not restart if it stops (once).
@@ -127,7 +136,7 @@ pub enum Commands {
     /// Send SIGKILL.
     Kill { services: Vec<String> },
 
-    /// Send SIGTERM and exit (exit).
+    /// Exit the service immediately.
     Exit { services: Vec<String> },
 }
 
