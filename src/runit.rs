@@ -8,19 +8,32 @@
 
 use libc::pid_t;
 use path::{Path, PathBuf};
+use std::convert::TryInto;
 use std::fs;
 use std::io;
+use std::io::Read;
 use std::path;
 use std::time;
 
 use anyhow::{anyhow, Context, Result};
 
 /// Possible states for a runit service.
+#[derive(Debug, Eq, Ord, PartialEq, PartialOrd, Copy, Clone)]
 pub enum RunitServiceState {
     Run,
     Down,
     Finish,
     Unknown,
+}
+
+/// Struct representing the parsed binary status
+#[derive(Debug)]
+pub struct RunitStatus {
+    pub state: RunitServiceState,
+    pub pid: Option<pid_t>,
+    pub start_time: Option<time::SystemTime>,
+    pub want: char,
+    pub paused: bool,
 }
 
 /**
@@ -84,38 +97,54 @@ impl RunitService {
         Ok(())
     }
 
-    /// Get the service PID if possible.
-    pub fn get_pid(&self) -> Result<pid_t> {
-        // "/<svdir>/<service>/supervise/pid"
-        let p = self.path.join("supervise").join("pid");
+    /// Parse the binary status file "supervise/status"
+    pub fn get_status(&self) -> Result<RunitStatus> {
+        let p = self.path.join("supervise").join("status");
+        let mut f = fs::File::open(&p)?;
+        let mut buf = [0u8; 20];
+        f.read_exact(&mut buf)?;
 
-        let pid: pid_t = fs::read_to_string(p)?.trim().parse()?;
-
-        Ok(pid)
-    }
-
-    /// Get the service state.
-    pub fn get_state(&self) -> RunitServiceState {
-        // "/<svdir>/<service>/supervise/stat"
-        let p = self.path.join("supervise").join("stat");
-
-        let s =
-            fs::read_to_string(p).unwrap_or_else(|_| String::from("unknown"));
-
-        match s.trim() {
-            "run" => RunitServiceState::Run,
-            "down" => RunitServiceState::Down,
-            "finish" => RunitServiceState::Finish,
+        // Byte 19: State (0: Down, 1: Run, 2: Finish)
+        let state = match buf[19] {
+            0 => RunitServiceState::Down,
+            1 => RunitServiceState::Run,
+            2 => RunitServiceState::Finish,
             _ => RunitServiceState::Unknown,
-        }
-    }
+        };
 
-    /// Get the service uptime.
-    pub fn get_start_time(&self) -> Result<time::SystemTime> {
-        // "/<svdir>/<service>/supervise/stat"
-        let p = self.path.join("supervise").join("stat");
+        // Bytes 12-15: PID (Little Endian)
+        let pid_raw = u32::from_le_bytes(buf[12..16].try_into()?);
+        let pid = if pid_raw > 0 {
+            Some(pid_raw as pid_t)
+        } else {
+            None
+        };
 
-        Ok(fs::metadata(p)?.modified()?)
+        // Byte 16: Paused
+        let paused = buf[16] == 1;
+
+        // Byte 17: Want ('u': up, 'd': down)
+        let want = buf[17] as char;
+
+        // Bytes 0-7: TAI64 Timestamp (Big Endian)
+        // TAI64 is 64-bit seconds. Runit uses an offset of 4611686018427387914ULL
+        let tai = u64::from_be_bytes(buf[0..8].try_into()?);
+        let offset = 4611686018427387914u64;
+
+        let start_time = if tai >= offset {
+            let secs = tai - offset;
+            Some(time::SystemTime::UNIX_EPOCH + time::Duration::from_secs(secs))
+        } else {
+            None
+        };
+
+        Ok(RunitStatus {
+            state,
+            pid,
+            start_time,
+            want,
+            paused,
+        })
     }
 }
 

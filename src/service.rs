@@ -11,7 +11,7 @@ use std::fmt;
 use std::path::Path;
 use std::time;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use yansi::{Color, Style};
 
 use crate::runit::{RunitService, RunitServiceState};
@@ -93,12 +93,34 @@ impl Service {
         let mut messages: Vec<String> = vec![];
         let name = service.name.to_string();
         let enabled = service.enabled();
-        let pid = service.get_pid();
-        let state = service.get_state();
-        let start_time = service.get_start_time();
+
+        // Fetch all status data in one go from the binary file
+        let status_result = service.get_status();
+
+        let (state, pid, start_time) = match status_result {
+            Ok(status) => {
+                let state = match status.state {
+                    RunitServiceState::Run => ServiceState::Run,
+                    RunitServiceState::Down => ServiceState::Down,
+                    RunitServiceState::Finish => ServiceState::Finish,
+                    RunitServiceState::Unknown => ServiceState::Unknown,
+                };
+
+                let time_res = status
+                    .start_time
+                    .ok_or_else(|| anyhow!("invalid timestamp"));
+
+                (state, status.pid, time_res)
+            }
+            Err(err) => {
+                // If we can't read the status file, the service is likely effectively "unknown" or "down"
+                // but we preserve the error in the start_time field for display purposes.
+                (ServiceState::Unknown, None, Err(err))
+            }
+        };
 
         let mut command = None;
-        if let Ok(p) = pid {
+        if let Some(p) = pid {
             match utils::cmd_from_pid(p, proc_path) {
                 Ok(cmd) => {
                     command = Some(cmd);
@@ -112,17 +134,6 @@ impl Service {
             };
         }
 
-        let pid = match pid {
-            Ok(pid) => Some(pid),
-            Err(ref err) => {
-                messages.push(format!(
-                    "{:?}: failed to get pid: {}",
-                    service.path, err
-                ));
-                None
-            }
-        };
-
         // optionally get pstree.  None if the user wants it, Some if the user
         // wants it regardless of execution success.
         let pstree = if want_pstree {
@@ -131,15 +142,15 @@ impl Service {
             None
         };
 
-        let state = match state {
-            RunitServiceState::Run => ServiceState::Run,
-            RunitServiceState::Down => ServiceState::Down,
-            RunitServiceState::Finish => ServiceState::Finish,
-            RunitServiceState::Unknown => ServiceState::Unknown,
+        let svc = Self {
+            name,
+            state,
+            enabled,
+            command,
+            pid,
+            start_time,
+            pstree,
         };
-
-        let svc =
-            Self { name, state, enabled, command, pid, start_time, pstree };
 
         (svc, messages)
     }
