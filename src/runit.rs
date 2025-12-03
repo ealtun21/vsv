@@ -114,11 +114,7 @@ impl RunitService {
 
         // Bytes 12-15: PID (Little Endian)
         let pid_raw = u32::from_le_bytes(buf[12..16].try_into()?);
-        let pid = if pid_raw > 0 {
-            Some(pid_raw as pid_t)
-        } else {
-            None
-        };
+        let pid = if pid_raw > 0 { Some(pid_raw as pid_t) } else { None };
 
         // Byte 16: Paused
         let paused = buf[16] == 1;
@@ -138,13 +134,7 @@ impl RunitService {
             None
         };
 
-        Ok(RunitStatus {
-            state,
-            pid,
-            start_time,
-            want,
-            paused,
-        })
+        Ok(RunitStatus { state, pid, start_time, want, paused })
     }
 }
 

@@ -54,6 +54,7 @@ pub fn do_status(cfg: &Config) -> Result<()> {
             ("PID", style.bold()),
             ("COMMAND", style.bold()),
             ("TIME", style.bold()),
+            ("LOG", style.bold()),
         )
     );
 

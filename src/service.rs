@@ -14,10 +14,11 @@ use std::time;
 use anyhow::{anyhow, Result};
 use yansi::{Color, Style};
 
-use crate::runit::{RunitService, RunitServiceState};
+use crate::runit::{RunitService, RunitServiceState, RunitStatus};
 use crate::utils;
 
 /// Possible states for a service.
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub enum ServiceState {
     Run,
     Down,
@@ -26,31 +27,7 @@ pub enum ServiceState {
 }
 
 impl ServiceState {
-    /// Get a suitable `yansi::Style` for the state.
-    pub fn get_style(&self) -> Style {
-        let style = Style::default();
-
-        let color = match self {
-            ServiceState::Run => Color::Green,
-            ServiceState::Down => Color::Red,
-            ServiceState::Finish => Color::Yellow,
-            ServiceState::Unknown => Color::Yellow,
-        };
-
-        style.fg(color)
-    }
-
-    /// Get a suitable char for the state (as a `String`).
-    pub fn get_char(&self) -> String {
-        let s = match self {
-            ServiceState::Run => "✔",
-            ServiceState::Down => "X",
-            ServiceState::Finish => "X",
-            ServiceState::Unknown => "?",
-        };
-
-        s.to_string()
-    }
+    // Removed unused get_style and get_char methods
 }
 
 impl fmt::Display for ServiceState {
@@ -80,6 +57,9 @@ pub struct Service {
     pid: Option<pid_t>,
     start_time: Result<time::SystemTime>,
     pstree: Option<Result<String>>,
+    want: char,
+    paused: bool,
+    log_status: Option<(RunitStatus, bool)>, // (status, enabled)
 }
 
 impl Service {
@@ -94,10 +74,9 @@ impl Service {
         let name = service.name.to_string();
         let enabled = service.enabled();
 
-        // Fetch all status data in one go from the binary file
         let status_result = service.get_status();
 
-        let (state, pid, start_time) = match status_result {
+        let (state, pid, start_time, want, paused) = match status_result {
             Ok(status) => {
                 let state = match status.state {
                     RunitServiceState::Run => ServiceState::Run,
@@ -110,13 +89,21 @@ impl Service {
                     .start_time
                     .ok_or_else(|| anyhow!("invalid timestamp"));
 
-                (state, status.pid, time_res)
+                (state, status.pid, time_res, status.want, status.paused)
             }
-            Err(err) => {
-                // If we can't read the status file, the service is likely effectively "unknown" or "down"
-                // but we preserve the error in the start_time field for display purposes.
-                (ServiceState::Unknown, None, Err(err))
+            Err(err) => (ServiceState::Unknown, None, Err(err), 'u', false),
+        };
+
+        // Check for log service status
+        let log_path = service.path.join("log");
+        let log_status = if log_path.exists() {
+            let log_svc = RunitService::new("log", &log_path);
+            match log_svc.get_status() {
+                Ok(st) => Some((st, log_svc.enabled())),
+                Err(_) => None,
             }
+        } else {
+            None
         };
 
         let mut command = None;
@@ -134,8 +121,6 @@ impl Service {
             };
         }
 
-        // optionally get pstree.  None if the user wants it, Some if the user
-        // wants it regardless of execution success.
         let pstree = if want_pstree {
             pid.map(|pid| get_pstree(pid, pstree_prog))
         } else {
@@ -150,6 +135,9 @@ impl Service {
             pid,
             start_time,
             pstree,
+            want,
+            paused,
+            log_status,
         };
 
         (svc, messages)
@@ -162,54 +150,142 @@ impl Service {
 
     /// Format the service char as a string.
     fn format_status_char(&self) -> (String, Style) {
-        (self.state.get_char(), self.state.get_style())
+        let style = Style::default();
+
+        match self.state {
+            ServiceState::Run => {
+                if self.paused {
+                    ("⏸".to_string(), style.fg(Color::Yellow))
+                } else if self.want == 'd' {
+                    ("▼".to_string(), style.fg(Color::Yellow))
+                } else {
+                    ("✔".to_string(), style.fg(Color::Green))
+                }
+            }
+            ServiceState::Down => {
+                if self.want == 'u' {
+                    ("X".to_string(), style.fg(Color::Red))
+                } else {
+                    ("■".to_string(), style.fg(Color::Yellow))
+                }
+            }
+            ServiceState::Finish => {
+                if self.paused {
+                    ("⏸".to_string(), style.fg(Color::Magenta))
+                } else if self.want == 'd' {
+                    ("▼".to_string(), style.fg(Color::Magenta))
+                } else {
+                    ("▽".to_string(), style.fg(Color::Magenta))
+                }
+            }
+            ServiceState::Unknown => ("?".to_string(), style.fg(Color::Yellow)),
+        }
+    }
+
+    /// Helper to determine icon and style for a RunitStatus (used for log)
+    fn get_runit_status_char(&self, status: &RunitStatus) -> (String, Style) {
+        let style = Style::default();
+        match status.state {
+            RunitServiceState::Run => {
+                if status.paused {
+                    ("⏸".to_string(), style.fg(Color::Yellow))
+                } else if status.want == 'd' {
+                    ("▼".to_string(), style.fg(Color::Yellow))
+                } else {
+                    ("✔".to_string(), style.fg(Color::Green))
+                }
+            }
+            RunitServiceState::Down => {
+                if status.want == 'u' {
+                    ("X".to_string(), style.fg(Color::Red))
+                } else {
+                    ("■".to_string(), style.fg(Color::Yellow))
+                }
+            }
+            RunitServiceState::Finish => {
+                if status.paused {
+                    ("⏸".to_string(), style.fg(Color::Magenta))
+                } else if status.want == 'd' {
+                    ("▼".to_string(), style.fg(Color::Magenta))
+                } else {
+                    ("▽".to_string(), style.fg(Color::Magenta))
+                }
+            }
+            RunitServiceState::Unknown => {
+                ("?".to_string(), style.fg(Color::Yellow))
+            }
+        }
+    }
+
+    fn format_log(&self) -> (String, Style) {
+        let style = Style::default();
+        match &self.log_status {
+            Some((status, enabled)) => {
+                let (mut icon, s) = self.get_runit_status_char(status);
+                if !enabled {
+                    icon.push_str(" -");
+                }
+                (icon, s)
+            }
+            None => ("-".to_string(), style.dim()),
+        }
     }
 
     /// Format the service state as a string.
     fn format_state(&self) -> (String, Style) {
-        (self.state.to_string(), self.state.get_style())
+        let s = self.state.to_string();
+        let style = Style::default();
+
+        let color = match self.state {
+            ServiceState::Run => {
+                if self.paused || self.want == 'd' {
+                    Color::Yellow
+                } else {
+                    Color::Green
+                }
+            }
+            ServiceState::Down => {
+                if self.want == 'u' {
+                    Color::Red
+                } else {
+                    Color::Yellow
+                }
+            }
+            ServiceState::Finish => Color::Magenta,
+            ServiceState::Unknown => Color::Yellow,
+        };
+
+        (s, style.fg(color))
     }
 
-    /// Format the service enabled status as a string.
     fn format_enabled(&self) -> (String, Style) {
         let style = match self.enabled {
             true => Style::default().fg(Color::Green),
             false => Style::default().fg(Color::Red),
         };
-
-        let s = self.enabled.to_string();
-
-        (s, style)
+        (self.enabled.to_string(), style)
     }
 
-    /// Format the service pid as a string.
     fn format_pid(&self) -> (String, Style) {
         let style = Style::default().fg(Color::Magenta);
-
         let s = match self.pid {
             Some(pid) => pid.to_string(),
             None => String::from("---"),
         };
-
         (s, style)
     }
 
-    /// Format the service command a string.
     fn format_command(&self) -> (String, Style) {
         let style = Style::default().fg(Color::Green);
-
         let s = match &self.command {
             Some(cmd) => cmd.clone(),
             None => String::from("---"),
         };
-
         (s, style)
     }
 
-    /// Format the service time as a string.
     fn format_time(&self) -> (String, Style) {
         let style = Style::default();
-
         let time = match &self.start_time {
             Ok(time) => time,
             Err(err) => return (err.to_string(), style.fg(Color::Red)),
@@ -230,10 +306,8 @@ impl Service {
         (s, style)
     }
 
-    /// Format the service `pstree` output as a string.
     pub fn format_pstree(&self) -> (String, Style) {
         let style = Style::default();
-
         let tree = match &self.pstree {
             Some(tree) => tree,
             None => return ("".into(), style),
@@ -251,7 +325,6 @@ impl Service {
 }
 
 impl fmt::Display for Service {
-    /// Format the service as a string suitable for output by `vsv`.
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let base = utils::format_status_line(
             self.format_status_char(),
@@ -261,13 +334,13 @@ impl fmt::Display for Service {
             self.format_pid(),
             self.format_command(),
             self.format_time(),
+            self.format_log(),
         );
 
         base.fmt(f)
     }
 }
 
-/// Get the `pstree` for a given pid.
 fn get_pstree(pid: pid_t, pstree_prog: &str) -> Result<String> {
     let cmd = pstree_prog.to_string();
     let args = ["-ac".to_string(), pid.to_string()];

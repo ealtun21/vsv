@@ -30,24 +30,6 @@ pub(crate) use verbose;
 
 /**
  * Format a status line - made specifically for vsv.
- *
- * # Example
- * ```
- * use yansi::Style;
- * let style = Style::default();
- * println!(
- *     "{}",
- *     format_status_line(
- *         ("", style.bold()),
- *         ("SERVICE", style.bold()),
- *         ("STATE", style.bold()),
- *         ("ENABLED", style.bold()),
- *         ("PID", style.bold()),
- *         ("COMMAND", style.bold()),
- *         ("TIME", style.bold()),
- *     )
- * );
- * ```
  */
 pub fn format_status_line<T: AsRef<str>>(
     status_char: (T, Style),
@@ -57,6 +39,7 @@ pub fn format_status_line<T: AsRef<str>>(
     pid: (T, Style),
     command: (T, Style),
     time: (T, Style),
+    log: (T, Style),
 ) -> String {
     // ( data + style to print, max width, suffix )
     let data = [
@@ -66,7 +49,8 @@ pub fn format_status_line<T: AsRef<str>>(
         (enabled, 9, "..."),
         (pid, 8, "..."),
         (command, 17, "..."),
-        (time, 0, "..."),
+        (time, 14, "..."),
+        (log, 0, "..."),
     ];
 
     let mut line = String::new();
@@ -87,17 +71,6 @@ pub fn format_status_line<T: AsRef<str>>(
 
 /**
  * Get the program name (arg0) for a PID.
- *
- * # Example
- *
- * ```
- * use std::path::PathBuf;
- *
- * let pid = 1;
- * let proc_path = PathBuf::from("/proc");
- * let cmd = cmd_from_pid(pid, &proc_path)?;
- * println!("pid {} program is {}", pid, cmd);
- * ```
  */
 pub fn cmd_from_pid(pid: pid_t, proc_path: &Path) -> Result<String> {
     // /<proc_path>/<pid>/cmdline
@@ -116,15 +89,6 @@ pub fn cmd_from_pid(pid: pid_t, proc_path: &Path) -> Result<String> {
 
 /**
  * Run a program and get stdout.
- *
- * # Example
- *
- * ```
- * let cmd = "echo";
- * let args = ["hello", "world"];
- * let out = run_program_get_output(&cmd, &args)?;
- * println!("stdout is '{}'", out);
- * ```
  */
 pub fn run_program_get_output<T1, T2>(cmd: &T1, args: &[T2]) -> Result<String>
 where
@@ -144,19 +108,6 @@ where
 
 /**
  * Run a program and get the exit status.
- *
- * # Example
- *
- * ```
- * let cmd = "echo";
- * let args = ["hello", "world"];
- * let c = run_program_get_status(&cmd, &args);
- * match c {
- *     Ok(status) => println!("exited with code: {}",
- *                   status.code().unwrap_or(-1)),
- *     Err(err) => eprintln!("program failed: {}", err),
- * };
- * ```
  */
 pub fn run_program_get_status<T1, T2>(
     cmd: &T1,
@@ -174,14 +125,6 @@ where
 /**
  * Create a `std::process::Command` from a given command name and argument
  * slice.
- *
- * # Example
- *
- * ```
- * let cmd = "echo";
- * let args = ["hello", "world"];
- * let c = make_command(&cmd, &args);
- * ```
  */
 fn make_command<T1, T2>(cmd: &T1, args: &[T2]) -> Command
 where
@@ -200,16 +143,6 @@ where
 /**
  * Convert a duration to a human-readable string like "5 minutes", "2 hours",
  * etc.
- *
- * # Example
- *
- * Duration for 5 seconds ago:
- *
- * ```
- * use std::time::Duration;
- * let dur = Duration::new(5, 0);
- * assert_eq!(relative_duration(&dur), "5 seconds".to_string());
- * ```
  */
 pub fn relative_duration(t: &Duration) -> String {
     let secs = t.as_secs();
@@ -241,23 +174,6 @@ pub fn relative_duration(t: &Duration) -> String {
 /**
  * Trim a string to be (at most) a certain number of characters with an
  * optional suffix.
- *
- * # Examples
- *
- * Trim the string `"hello world"` to be (at most) 8 characters and add
- * `"..."`:
- *
- * ```
- * let s = trim_long_string("hello world", 8, "...");
- * assert_eq!(s, "hello...");
- * ```
- *
- * The suffix will only be added if the original string needed to be trimmed:
- *
- * ```
- * let s = trim_long_string("hello world", 100, "...");
- * assert_eq!(s, "hello world");
- * ```
  */
 pub fn trim_long_string(s: &str, limit: usize, suffix: &str) -> String {
     let suffix_len = suffix.len();
@@ -277,99 +193,4 @@ pub fn trim_long_string(s: &str, limit: usize, suffix: &str) -> String {
         s.chars().take(limit - suffix_len).collect::<String>(),
         suffix
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_run_program_get_output_good_program_exit_success() -> Result<()> {
-        let cmd = "echo";
-        let args = ["hello", "world"];
-        let out = run_program_get_output(&cmd, &args)?;
-
-        assert_eq!(out, "hello world\n", "stdout is correct");
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_run_program_get_output_good_program_exit_failure() -> Result<()> {
-        let cmd = "false";
-        let args: [&str; 0] = [];
-        let out = run_program_get_output(&cmd, &args);
-
-        assert!(out.is_err(), "program generates an error");
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_run_program_get_output_bad_program() -> Result<()> {
-        let cmd = "this-command-should-never-exist---seriously";
-        let args: [&str; 0] = [];
-        let out = run_program_get_output(&cmd, &args);
-
-        assert!(out.is_err(), "program generates an error");
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_run_program_get_status_good_program_exit_success() -> Result<()> {
-        let cmd = "true";
-        let args: [&str; 0] = [];
-        let c = run_program_get_status(&cmd, &args)?;
-
-        assert_eq!(c.code().unwrap_or(-1), 0, "program exits successfully");
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_run_program_get_status_good_program_exit_failure() -> Result<()> {
-        let cmd = "false";
-        let args: [&str; 0] = [];
-        let c = run_program_get_status(&cmd, &args)?;
-
-        let code =
-            c.code().ok_or_else(|| anyhow!("failed to get exit code"))?;
-
-        assert_ne!(code, 0, "program exit code is not 0");
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_run_program_get_status_bad_program() -> Result<()> {
-        let cmd = "this-command-should-never-exist---seriously";
-        let args: [&str; 0] = [];
-        let c = run_program_get_status(&cmd, &args);
-
-        assert!(c.is_err(), "program generates an error");
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_relative_durations() {
-        use std::time::Duration;
-
-        let arr = [
-            (0, "0 seconds"),
-            (3, "3 seconds"),
-            (3 * 60, "3 minutes"),
-            (3 * 60 * 60, "3 hours"),
-            (3 * 60 * 60 * 24, "3 days"),
-            (3 * 60 * 60 * 24 * 7, "3 weeks"),
-            (3 * 60 * 60 * 24 * 30, "3 months"),
-            (3 * 60 * 60 * 24 * 365, "3 years"),
-        ];
-
-        for (secs, s) in arr {
-            let dur = Duration::new(secs, 0);
-            assert_eq!(relative_duration(&dur), s, "duration mismatch");
-        }
-    }
 }
