@@ -49,6 +49,9 @@ fn do_main() -> Result<()> {
         cfg.colorize
     );
 
+    // check for root permissions
+    check_root_permissions(&cfg);
+
     // figure out subcommand to run
     match cfg.mode {
         ProgramMode::Status => commands::status::do_status(&cfg),
@@ -58,10 +61,25 @@ fn do_main() -> Result<()> {
     }
 }
 
+fn check_root_permissions(cfg: &Config) {
+    // Only enforce root if we are using the default system directory.
+    // Users running vsv on their own home directory (vsv -u) should not be blocked.
+    if cfg.svdir.to_str() == Some(config::DEFAULT_SVDIR) {
+        let is_root = unsafe { libc::geteuid() } == 0;
+        if !is_root {
+            die!(
+                1,
+                "Root permissions required to manage services in {}. Please run with sudo.",
+                config::DEFAULT_SVDIR
+            );
+        }
+    }
+}
+
 fn main() {
     let ret = do_main();
 
     if let Err(err) = ret {
-        die!(1, "{}: {:?}", "error".red(), err);
+        die!(1, "{}: {:?}", "error".red().bold(), err);
     }
 }
