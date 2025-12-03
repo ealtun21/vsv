@@ -33,6 +33,7 @@ pub fn do_status(cfg: &Config) -> Result<()> {
             Service::from_runit_service(
                 service,
                 cfg.tree,
+                !cfg.log, // If we are logging (-l), do NOT show the log status column
                 &cfg.proc_path,
                 &cfg.pstree_prog,
             )
@@ -44,6 +45,10 @@ pub fn do_status(cfg: &Config) -> Result<()> {
 
     verbose!(cfg, "found {} services in {:?}", services.len(), cfg.svdir);
     println!();
+
+    // Hide the "LOG" header if we are in log mode
+    let log_header = if cfg.log { "" } else { "LOG" };
+
     println!(
         "{}",
         utils::format_status_line(
@@ -54,7 +59,7 @@ pub fn do_status(cfg: &Config) -> Result<()> {
             ("PID", style.bold()),
             ("COMMAND", style.bold()),
             ("TIME", style.bold()),
-            ("LOG", style.bold()),
+            (log_header, style.bold()),
         )
     );
 

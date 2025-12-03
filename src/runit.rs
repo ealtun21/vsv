@@ -187,9 +187,12 @@ where
 
         if log {
             let p = entry.path().join("log");
-            let name = "- log";
-            let service = RunitService::new(name, &p);
-            dirs.push(service);
+            // Only add the log service if the directory actually exists
+            if p.exists() {
+                let name = "- log";
+                let service = RunitService::new(name, &p);
+                dirs.push(service);
+            }
         }
     }
 

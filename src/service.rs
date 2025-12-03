@@ -27,7 +27,31 @@ pub enum ServiceState {
 }
 
 impl ServiceState {
-    // Removed unused get_style and get_char methods
+    /// Get a suitable `yansi::Style` for the state.
+    pub fn get_style(&self) -> Style {
+        let style = Style::default();
+
+        let color = match self {
+            ServiceState::Run => Color::Green,
+            ServiceState::Down => Color::Red,
+            ServiceState::Finish => Color::Yellow,
+            ServiceState::Unknown => Color::Yellow,
+        };
+
+        style.fg(color)
+    }
+
+    /// Get a suitable char for the state (as a `String`).
+    pub fn get_char(&self) -> String {
+        let s = match self {
+            ServiceState::Run => "✔",
+            ServiceState::Down => "X",
+            ServiceState::Finish => "X",
+            ServiceState::Unknown => "?",
+        };
+
+        s.to_string()
+    }
 }
 
 impl fmt::Display for ServiceState {
@@ -60,6 +84,7 @@ pub struct Service {
     want: char,
     paused: bool,
     log_status: Option<(RunitStatus, bool)>, // (status, enabled)
+    print_log_column: bool,
 }
 
 impl Service {
@@ -67,6 +92,7 @@ impl Service {
     pub fn from_runit_service(
         service: &RunitService,
         want_pstree: bool,
+        want_log_status: bool,
         proc_path: &Path,
         pstree_prog: &str,
     ) -> (Self, Vec<String>) {
@@ -138,6 +164,7 @@ impl Service {
             want,
             paused,
             log_status,
+            print_log_column: want_log_status,
         };
 
         (svc, messages)
@@ -218,6 +245,10 @@ impl Service {
     }
 
     fn format_log(&self) -> (String, Style) {
+        if !self.print_log_column {
+            return ("".to_string(), Style::default());
+        }
+
         let style = Style::default();
         match &self.log_status {
             Some((status, enabled)) => {
