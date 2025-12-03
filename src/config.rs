@@ -21,14 +21,12 @@ use crate::arguments::{Args, Commands};
 // default values
 pub const DEFAULT_SVDIR: &str = "/var/service";
 pub const DEFAULT_PROC_DIR: &str = "/proc";
-pub const DEFAULT_PSTREE_PROG: &str = "pstree";
 pub const DEFAULT_USER_DIR: &str = "runit/service";
 
 // env var name
 pub const ENV_NO_COLOR: &str = "NO_COLOR";
 pub const ENV_SVDIR: &str = "SVDIR";
 pub const ENV_PROC_DIR: &str = "PROC_DIR";
-pub const ENV_PSTREE_PROG: &str = "PSTREE_PROG";
 
 /// vsv execution modes (subcommands).
 #[derive(Debug)]
@@ -37,6 +35,7 @@ pub enum ProgramMode {
     Enable,
     Disable,
     Control,
+    Log,
 }
 
 impl fmt::Display for ProgramMode {
@@ -46,7 +45,9 @@ impl fmt::Display for ProgramMode {
             ProgramMode::Enable => "enable",
             ProgramMode::Disable => "disable",
             ProgramMode::Control => "control",
+            ProgramMode::Log => "log",
         };
+
         s.fmt(f)
     }
 }
@@ -58,10 +59,9 @@ pub struct Config {
     pub svdir: PathBuf,
     pub tree: bool,
     pub log: bool,
-    pub verbose: u8,
+    pub verbose: usize,
     pub operands: Vec<String>,
     pub proc_path: PathBuf,
-    pub pstree_prog: String,
 }
 
 impl Config {
@@ -70,56 +70,68 @@ impl Config {
         let mut log = args.log;
         let mut operands = vec![];
 
-        let mode = match &args.command {
-            Some(Commands::Status { tree: t, log: l, filter }) => {
-                if *t {
-                    tree = true;
+        let svdir = get_svdir(&args.dir, args.user)
+            .context("failed to determine SVDIR")?;
+
+        // check mode
+        let mode = if let Some(cmd) = &args.command {
+            match cmd {
+                Commands::Status { tree: t, filter, log: l } => {
+                    if *t {
+                        tree = true;
+                    }
+                    if *l {
+                        log = true;
+                    }
+                    operands = filter.to_vec();
+                    ProgramMode::Status
                 }
-                if *l {
-                    log = true;
+                Commands::Enable { services } => {
+                    operands = services.to_vec();
+                    ProgramMode::Enable
                 }
-                operands = filter.to_vec();
-                ProgramMode::Status
+                Commands::Disable { services } => {
+                    operands = services.to_vec();
+                    ProgramMode::Disable
+                }
+                Commands::Log { service, args: _ } => {
+                    operands = vec![service.to_string()];
+                    ProgramMode::Log
+                }
+                _ => {
+                    // Control commands
+                    match cmd {
+                        Commands::Start { services }
+                        | Commands::Stop { services }
+                        | Commands::Restart { services }
+                        | Commands::Reload { services }
+                        | Commands::Once { services }
+                        | Commands::Pause { services }
+                        | Commands::Cont { services }
+                        | Commands::Hup { services }
+                        | Commands::Alarm { services }
+                        | Commands::Interrupt { services }
+                        | Commands::Quit { services }
+                        | Commands::Term { services }
+                        | Commands::Kill { services }
+                        | Commands::Exit { services } => {
+                            operands = services.to_vec();
+                        }
+                        _ => {}
+                    }
+                    ProgramMode::Control
+                }
             }
-            Some(Commands::Enable { services }) => {
-                operands = services.to_vec();
-                ProgramMode::Enable
-            }
-            Some(Commands::Disable { services }) => {
-                operands = services.to_vec();
-                ProgramMode::Disable
-            }
-            // Map all control commands to ProgramMode::Control
-            Some(Commands::Start { services })
-            | Some(Commands::Stop { services })
-            | Some(Commands::Restart { services })
-            | Some(Commands::Reload { services })
-            | Some(Commands::Once { services })
-            | Some(Commands::Pause { services })
-            | Some(Commands::Cont { services })
-            | Some(Commands::Hup { services })
-            | Some(Commands::Alarm { services })
-            | Some(Commands::Interrupt { services })
-            | Some(Commands::Quit { services })
-            | Some(Commands::Term { services })
-            | Some(Commands::Kill { services })
-            | Some(Commands::Exit { services }) => {
-                operands = services.to_vec();
-                ProgramMode::Control
-            }
-            None => ProgramMode::Status,
+        } else {
+            // Default to Status if no subcommand is given
+            ProgramMode::Status
         };
 
         let colorize = should_colorize_output(&args.color)?;
-        let svdir = get_svdir(&args.dir, args.user)?;
-        let verbose = args.verbose;
-
+        let verbose = args.verbose as usize;
         let proc_path = env::var_os(ENV_PROC_DIR)
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(DEFAULT_PROC_DIR));
-
-        let pstree_prog = env::var(ENV_PSTREE_PROG)
-            .unwrap_or_else(|_| DEFAULT_PSTREE_PROG.to_string());
 
         let o = Self {
             mode,
@@ -130,7 +142,6 @@ impl Config {
             verbose,
             operands,
             proc_path,
-            pstree_prog,
         };
 
         Ok(o)
@@ -173,12 +184,13 @@ fn get_svdir(dir_arg: &Option<PathBuf>, user_arg: bool) -> Result<PathBuf> {
 
     // `-u`
     if user_arg {
-        let home = env::var_os("HOME").context("env HOME not set")?;
+        let home = env::var_os("HOME")
+            .context("failed to determine home directory (no HOME env var)")?;
         let path = PathBuf::from(home).join(DEFAULT_USER_DIR);
         return Ok(path);
     }
 
-    // env `SVDIR`
+    // `SVDIR` env
     if let Some(dir) = env::var_os(ENV_SVDIR) {
         return Ok(PathBuf::from(dir));
     }

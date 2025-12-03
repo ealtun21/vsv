@@ -35,7 +35,6 @@ pub fn do_status(cfg: &Config) -> Result<()> {
                 cfg.tree,
                 !cfg.log, // If we are logging (-l), do NOT show the log status column
                 &cfg.proc_path,
-                &cfg.pstree_prog,
             )
         })
         .collect();

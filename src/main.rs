@@ -12,7 +12,7 @@
 
 #![allow(clippy::uninlined_format_args)]
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use yansi::Paint;
 
 mod arguments;
@@ -62,6 +62,15 @@ fn do_main() -> Result<()> {
             }
             Commands::Disable { .. } => {
                 commands::enable_disable::do_disable(&cfg)
+            }
+            Commands::Log { service, args: _ } => {
+                // Log command logic directly here using utils
+                let log_path = cfg.svdir.join(service).join("log/current");
+                if !log_path.exists() {
+                    bail!("log file does not exist: {:?}", log_path);
+                }
+                println!("{} {}...", "viewing log for".green(), service.bold());
+                utils::follow_file(&log_path)
             }
             // Pass all other commands to the control handler
             _ => commands::control::run(&cfg, cmd),

@@ -7,14 +7,13 @@
 //! Runit service related structs and enums.
 
 use libc::pid_t;
-use path::{Path, PathBuf};
 use std::convert::TryInto;
 use std::fs;
 use std::fs::OpenOptions;
 use std::io;
 use std::io::Read;
 use std::io::Write;
-use std::path;
+use std::path::{Path, PathBuf};
 use std::time;
 
 use anyhow::{anyhow, Context, Result};
@@ -174,6 +173,24 @@ impl RunitService {
         };
 
         Ok(RunitStatus { state, pid, start_time, want, paused })
+    }
+
+    /// Get status of the associated log service if it exists
+    pub fn get_log_status(&self) -> Result<RunitStatus> {
+        let log_path = self.path.join("log");
+        if !log_path.exists() {
+            return Err(anyhow!("no log service found"));
+        }
+        let log_svc = RunitService::new("log", &log_path);
+        log_svc.get_status()
+    }
+
+    /// Check if the associated log service is running
+    pub fn log_running(&self) -> bool {
+        match self.get_log_status() {
+            Ok(s) => s.pid.is_some(),
+            Err(_) => false,
+        }
     }
 }
 

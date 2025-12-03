@@ -20,6 +20,15 @@ use clap::{ArgAction, Parser, Subcommand};
     Manage and view runit services
     Made specifically for Void Linux but should work anywhere
     Author: Dave Eddy <dave@daveeddy.com> (bahamas10)")]
+#[clap(after_help = "All commands are implemented natively in Rust.
+Common subcommands:
+
+    start <service>           Start the service
+    stop <service>            Stop the service
+    restart <service>         Restart the service
+    reload <service>          Reload the service (send SIGHUP)
+    log <service>             View service logs (tail -f)
+")]
 pub struct Args {
     /// Enable or disable color output.
     #[clap(short, long, value_name = "yes|no|auto")]
@@ -82,6 +91,14 @@ pub enum Commands {
 
     /// Reload service(s) (send SIGHUP).
     Reload { services: Vec<String> },
+
+    /// View service log (tail -f).
+    Log {
+        service: String,
+        /// Arguments passed to tail (e.g. -n 100)
+        #[clap(allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
 
     /// Start if service is not running. Do not restart if it stops (once).
     Once { services: Vec<String> },
