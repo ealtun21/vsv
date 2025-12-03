@@ -12,7 +12,10 @@
 
 #![allow(clippy::uninlined_format_args)]
 
-use anyhow::{bail, Context, Result};
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result};
 use yansi::Paint;
 
 mod arguments;
@@ -64,13 +67,70 @@ fn do_main() -> Result<()> {
                 commands::enable_disable::do_disable(&cfg)
             }
             Commands::Log { service, args: _ } => {
-                // Log command logic directly here using utils
-                let log_path = cfg.svdir.join(service).join("log/current");
-                if !log_path.exists() {
-                    bail!("log file does not exist: {:?}", log_path);
+                // Log command logic
+                let svdir_log = cfg.svdir.join(service).join("log");
+                let log_current = svdir_log.join("current");
+                
+                // 1. Try standard runit log/current
+                if log_current.exists() {
+                     println!("{} {}...", "viewing log for".green(), service.bold());
+                     return utils::follow_file(&log_current);
                 }
-                println!("{} {}...", "viewing log for".green(), service.bold());
-                utils::follow_file(&log_path)
+
+                // 2. Try to deduce if it uses syslog/vlogger
+                // We check the 'run' script in the log directory
+                let log_run = svdir_log.join("run");
+                if log_run.exists() {
+                    if let Ok(content) = fs::read_to_string(&log_run) {
+                        // Look for "-t TAG" or just assume service name if vlogger is used
+                        let mut tag = String::new();
+                        
+                        // Simple parser for "vlogger -t tag" or "logger -t tag"
+                        for line in content.lines() {
+                            if line.contains("vlogger") || line.contains("logger") {
+                                let parts: Vec<&str> = line.split_whitespace().collect();
+                                for (i, part) in parts.iter().enumerate() {
+                                    if *part == "-t" && i + 1 < parts.len() {
+                                        tag = parts[i+1].to_string();
+                                        break;
+                                    }
+                                }
+                                // If found vlogger but no tag, default to service name
+                                if tag.is_empty() && line.contains("vlogger") {
+                                    tag = service.to_string();
+                                }
+                            }
+                        }
+
+                        if !tag.is_empty() {
+                            // We found a tag, now look for a system log file
+                            // Priority: Void socklog -> Standard syslog -> Messages
+                            let syslogs = [
+                                "/var/log/socklog/everything/current",
+                                "/var/log/syslog",
+                                "/var/log/messages",
+                            ];
+
+                            for sys_log_path_str in syslogs {
+                                let p = PathBuf::from(sys_log_path_str);
+                                if p.exists() {
+                                    println!("{} {} in {}...", 
+                                        "viewing syslog for tag".green(), 
+                                        tag.bold(),
+                                        sys_log_path_str.dim());
+                                    
+                                    return utils::follow_file_filtered(&p, &tag);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 3. Give up
+                println!("{} {}", "Log file not found at:".red(), log_current.display());
+                println!("This service likely uses a logger (like vlogger/logger) that writes to syslog.");
+                println!("Check /var/log/socklog/, /var/log/syslog, or use 'logread'.");
+                Ok(())
             }
             // Pass all other commands to the control handler
             _ => commands::control::run(&cfg, cmd),
