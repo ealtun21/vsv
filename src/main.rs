@@ -66,11 +66,16 @@ fn do_main() -> Result<()> {
             Commands::Disable { .. } => {
                 commands::enable_disable::do_disable(&cfg)
             }
+            // --- NEW COMMANDS START ---
+            Commands::Add { .. } => commands::add_remove::do_add(&cfg),
+            Commands::Remove { .. } => commands::add_remove::do_remove(&cfg),
+            Commands::Avail => commands::add_remove::do_avail(&cfg),
+            // --- NEW COMMANDS END ---
             Commands::Log { service, lines, all } => {
                 // Log command logic
                 let svdir_log = cfg.svdir.join(service).join("log");
                 let log_current = svdir_log.join("current");
-                
+
                 let num_lines = lines.unwrap_or(10);
                 // "all" overrides lines
                 let (lines_to_show, read_all) = if *all {
@@ -79,12 +84,25 @@ fn do_main() -> Result<()> {
                     (num_lines, false)
                 };
 
-                let desc = if read_all { "all".to_string() } else { num_lines.to_string() };
+                let desc = if read_all {
+                    "all".to_string()
+                } else {
+                    num_lines.to_string()
+                };
 
                 // 1. Try standard runit log/current
                 if log_current.exists() {
-                     println!("{} {} ({} lines)...", "viewing log for".green(), service.bold(), desc);
-                     return utils::follow_file(&log_current, lines_to_show, read_all);
+                    println!(
+                        "{} {} ({} lines)...",
+                        "viewing log for".green(),
+                        service.bold(),
+                        desc
+                    );
+                    return utils::follow_file(
+                        &log_current,
+                        lines_to_show,
+                        read_all,
+                    );
                 }
 
                 // 2. Try to deduce if it uses syslog/vlogger
@@ -94,14 +112,17 @@ fn do_main() -> Result<()> {
                     if let Ok(content) = fs::read_to_string(&log_run) {
                         // Look for "-t TAG" or just assume service name if vlogger is used
                         let mut tag = String::new();
-                        
+
                         // Simple parser for "vlogger -t tag" or "logger -t tag"
                         for line in content.lines() {
-                            if line.contains("vlogger") || line.contains("logger") {
-                                let parts: Vec<&str> = line.split_whitespace().collect();
+                            if line.contains("vlogger")
+                                || line.contains("logger")
+                            {
+                                let parts: Vec<&str> =
+                                    line.split_whitespace().collect();
                                 for (i, part) in parts.iter().enumerate() {
                                     if *part == "-t" && i + 1 < parts.len() {
-                                        tag = parts[i+1].to_string();
+                                        tag = parts[i + 1].to_string();
                                         break;
                                     }
                                 }
@@ -124,13 +145,20 @@ fn do_main() -> Result<()> {
                             for sys_log_path_str in syslogs {
                                 let p = PathBuf::from(sys_log_path_str);
                                 if p.exists() {
-                                    println!("{} {} in {} ({} lines)...", 
-                                        "viewing syslog for tag".green(), 
+                                    println!(
+                                        "{} {} in {} ({} lines)...",
+                                        "viewing syslog for tag".green(),
                                         tag.bold(),
                                         sys_log_path_str.dim(),
-                                        desc);
-                                    
-                                    return utils::follow_file_filtered(&p, &tag, lines_to_show, read_all);
+                                        desc
+                                    );
+
+                                    return utils::follow_file_filtered(
+                                        &p,
+                                        &tag,
+                                        lines_to_show,
+                                        read_all,
+                                    );
                                 }
                             }
                         }
@@ -138,7 +166,11 @@ fn do_main() -> Result<()> {
                 }
 
                 // 3. Give up
-                println!("{} {}", "Log file not found at:".red(), log_current.display());
+                println!(
+                    "{} {}",
+                    "Log file not found at:".red(),
+                    log_current.display()
+                );
                 println!("This service likely uses a logger (like vlogger/logger) that writes to syslog.");
                 println!("Check /var/log/socklog/, /var/log/syslog, or use 'logread'.");
                 Ok(())

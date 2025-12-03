@@ -22,6 +22,7 @@ use crate::arguments::{Args, Commands};
 pub const DEFAULT_SVDIR: &str = "/var/service";
 pub const DEFAULT_PROC_DIR: &str = "/proc";
 pub const DEFAULT_USER_DIR: &str = "runit/service";
+pub const DEFAULT_AVAIL_DIR: &str = "/etc/sv"; // New constant
 
 // env var name
 pub const ENV_NO_COLOR: &str = "NO_COLOR";
@@ -36,6 +37,9 @@ pub enum ProgramMode {
     Disable,
     Control,
     Log,
+    Add,    // New
+    Remove, // New
+    Avail,  // New
 }
 
 impl fmt::Display for ProgramMode {
@@ -46,6 +50,9 @@ impl fmt::Display for ProgramMode {
             ProgramMode::Disable => "disable",
             ProgramMode::Control => "control",
             ProgramMode::Log => "log",
+            ProgramMode::Add => "add",
+            ProgramMode::Remove => "remove",
+            ProgramMode::Avail => "avail",
         };
 
         s.fmt(f)
@@ -57,6 +64,7 @@ pub struct Config {
     pub mode: ProgramMode,
     pub colorize: bool,
     pub svdir: PathBuf,
+    pub avail_dir: PathBuf, // New field
     pub tree: bool,
     pub log: bool,
     pub verbose: usize,
@@ -72,6 +80,9 @@ impl Config {
 
         let svdir = get_svdir(&args.dir, args.user)
             .context("failed to determine SVDIR")?;
+
+        // Determine available directory (defaulting to /etc/sv)
+        let avail_dir = PathBuf::from(DEFAULT_AVAIL_DIR);
 
         // check mode
         let mode = if let Some(cmd) = &args.command {
@@ -94,8 +105,17 @@ impl Config {
                     operands = services.to_vec();
                     ProgramMode::Disable
                 }
+                // New Commands
+                Commands::Add { services } => {
+                    operands = services.to_vec();
+                    ProgramMode::Add
+                }
+                Commands::Remove { services } => {
+                    operands = services.to_vec();
+                    ProgramMode::Remove
+                }
+                Commands::Avail => ProgramMode::Avail,
                 Commands::Log { service, .. } => {
-                    // .. ignores lines and all, they are handled in main.rs
                     operands = vec![service.to_string()];
                     ProgramMode::Log
                 }
@@ -124,9 +144,6 @@ impl Config {
                 }
             }
         } else {
-            if let Some(filter) = &args.filter {
-                operands = vec![filter.to_string()];
-            }
             ProgramMode::Status
         };
 
@@ -140,6 +157,7 @@ impl Config {
             mode,
             colorize,
             svdir,
+            avail_dir,
             tree,
             log,
             verbose,

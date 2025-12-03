@@ -61,21 +61,21 @@ pub fn format_status_line<T: AsRef<str>>(
     for (i, (field, max_width, suffix)) in data.iter().enumerate() {
         let (text, style) = field;
         let text = text.as_ref();
-        
+
         let char_count = text.chars().count();
         let suffix_len = suffix.chars().count();
 
-        // Truncate logic: ensure the resulting string (including suffix) 
+        // Truncate logic: ensure the resulting string (including suffix)
         // fits within max_width to maintain alignment.
         let s = if *max_width > 0 {
             if char_count > *max_width {
                 // Calculate how much text we can keep
-                let limit = if *max_width > suffix_len { 
-                    *max_width - suffix_len 
-                } else { 
-                    0 
+                let limit = if *max_width > suffix_len {
+                    *max_width - suffix_len
+                } else {
+                    0
                 };
-                
+
                 let mut s: String = text.chars().take(limit).collect();
                 s.push_str(suffix);
                 s
@@ -92,10 +92,11 @@ pub fn format_status_line<T: AsRef<str>>(
         // spacing
         if i < data.len() - 1 {
             // Calculate padding based on the formatted string 's'
-            let width = if *max_width > 0 { *max_width } else { s.chars().count() };
+            let width =
+                if *max_width > 0 { *max_width } else { s.chars().count() };
             let current_len = s.chars().count();
             let pad = if width > current_len { width - current_len } else { 0 };
-            
+
             // Use +2 spacing to match the original vsv look and separate columns clearly
             let spacing = " ".repeat(pad + 2);
             line.push_str(&spacing);
@@ -175,7 +176,7 @@ pub fn get_pstree(root_pid: pid_t, proc_path: &Path) -> Result<String> {
             Err(_) => continue,
         };
         let path = entry.path();
-        
+
         let pid_str = match path.file_name().and_then(|s| s.to_str()) {
             Some(s) if s.chars().all(char::is_numeric) => s,
             _ => continue,
@@ -203,7 +204,9 @@ pub fn get_pstree(root_pid: pid_t, proc_path: &Path) -> Result<String> {
         let cmdline_path = path.join("cmdline");
         let name = if let Ok(mut cmd) = fs::read_to_string(&cmdline_path) {
             if cmd.is_empty() {
-                if let (Some(l), Some(r)) = (stat_content.find('('), stat_content.rfind(')')) {
+                if let (Some(l), Some(r)) =
+                    (stat_content.find('('), stat_content.rfind(')'))
+                {
                     stat_content[l + 1..r].to_string()
                 } else {
                     format!("{}", pid)
@@ -213,31 +216,47 @@ pub fn get_pstree(root_pid: pid_t, proc_path: &Path) -> Result<String> {
                 cmd.trim().to_string()
             }
         } else {
-             format!("{}", pid)
+            format!("{}", pid)
         };
 
-        procs.insert(pid, ProcNode { pid, ppid, name: name.clone(), is_thread: false });
+        procs.insert(
+            pid,
+            ProcNode { pid, ppid, name: name.clone(), is_thread: false },
+        );
         children_map.entry(ppid).or_default().push(pid);
 
         let task_path = path.join("task");
         if let Ok(task_dir) = fs::read_dir(task_path) {
             for task_entry in task_dir.flatten() {
                 let t_path = task_entry.path();
-                let tid_str = match t_path.file_name().and_then(|s| s.to_str()) {
+                let tid_str = match t_path.file_name().and_then(|s| s.to_str())
+                {
                     Some(s) if s.chars().all(char::is_numeric) => s,
                     _ => continue,
                 };
                 let tid: pid_t = tid_str.parse().unwrap_or(0);
 
-                if tid == pid { continue; } 
+                if tid == pid {
+                    continue;
+                }
 
                 let t_stat_path = t_path.join("stat");
                 if let Ok(t_stat) = fs::read_to_string(t_stat_path) {
-                    if let (Some(l), Some(r)) = (t_stat.find('('), t_stat.rfind(')')) {
+                    if let (Some(l), Some(r)) =
+                        (t_stat.find('('), t_stat.rfind(')'))
+                    {
                         let t_comm = t_stat[l + 1..r].to_string();
                         let t_name = format!("{{{}}}", t_comm);
 
-                        procs.insert(tid, ProcNode { pid: tid, ppid: pid, name: t_name, is_thread: true });
+                        procs.insert(
+                            tid,
+                            ProcNode {
+                                pid: tid,
+                                ppid: pid,
+                                name: t_name,
+                                is_thread: true,
+                            },
+                        );
                         children_map.entry(pid).or_default().push(tid);
                     }
                 }
@@ -249,11 +268,18 @@ pub fn get_pstree(root_pid: pid_t, proc_path: &Path) -> Result<String> {
     if let Some(root_node) = procs.get(&root_pid) {
         out.push_str(&root_node.name);
         out.push('\n');
-        
+
         let mut seen = HashSet::new();
         seen.insert(root_pid);
-        
-        build_tree_recursive(root_pid, &procs, &children_map, &mut out, "", &mut seen);
+
+        build_tree_recursive(
+            root_pid,
+            &procs,
+            &children_map,
+            &mut out,
+            "",
+            &mut seen,
+        );
     } else {
         return Ok(String::new());
     }
@@ -275,29 +301,46 @@ fn build_tree_recursive(
 
         let count = sorted_children.len();
         for (i, &child_pid) in sorted_children.iter().enumerate() {
-            if seen.contains(&child_pid) { continue; }
+            if seen.contains(&child_pid) {
+                continue;
+            }
             seen.insert(child_pid);
 
             if let Some(child_node) = procs.get(&child_pid) {
                 let is_last = i == count - 1;
                 let connector = if is_last { "└─" } else { "├─" };
                 let child_prefix = if is_last { "  " } else { "│ " };
-                
-                out.push_str(&format!("{}{}{}\n", prefix, connector, child_node.name));
+
+                out.push_str(&format!(
+                    "{}{}{}\n",
+                    prefix, connector, child_node.name
+                ));
 
                 let new_prefix = format!("{}{}", prefix, child_prefix);
-                build_tree_recursive(child_pid, procs, children_map, out, &new_prefix, seen);
+                build_tree_recursive(
+                    child_pid,
+                    procs,
+                    children_map,
+                    out,
+                    &new_prefix,
+                    seen,
+                );
             }
         }
     }
 }
 
 /// Helper: seek to end minus estimated size (or 0 if reading all), read content.
-fn get_tail_content(path: &Path, n_lines: usize, read_all: bool) -> Result<(File, String)> {
-    let mut file = File::open(path).with_context(|| format!("failed to open log file {:?}", path))?;
+fn get_tail_content(
+    path: &Path,
+    n_lines: usize,
+    read_all: bool,
+) -> Result<(File, String)> {
+    let mut file = File::open(path)
+        .with_context(|| format!("failed to open log file {:?}", path))?;
 
     let file_len = file.metadata()?.len();
-    
+
     // Estimate bytes needed: avg 200 bytes per line + standard buffer
     let estimated_bytes = (n_lines as u64) * 200;
     let initial_read_size = std::cmp::max(8192, estimated_bytes);
@@ -322,12 +365,12 @@ fn get_tail_content(path: &Path, n_lines: usize, read_all: bool) -> Result<(File
 pub fn follow_file(path: &Path, n_lines: usize, read_all: bool) -> Result<()> {
     let (mut file, content) = get_tail_content(path, n_lines, read_all)?;
     let lines: Vec<&str> = content.lines().collect();
-    
+
     // If not reading all, only show the last N lines
-    let start_line = if !read_all && lines.len() > n_lines { 
-        lines.len() - n_lines 
-    } else { 
-        0 
+    let start_line = if !read_all && lines.len() > n_lines {
+        lines.len() - n_lines
+    } else {
+        0
     };
 
     for line in &lines[start_line..] {
@@ -359,9 +402,14 @@ pub fn follow_file(path: &Path, n_lines: usize, read_all: bool) -> Result<()> {
 }
 
 /// Follow a file (tail -f) but only print lines containing `filter_str`.
-pub fn follow_file_filtered(path: &Path, filter_str: &str, n_lines: usize, read_all: bool) -> Result<()> {
+pub fn follow_file_filtered(
+    path: &Path,
+    filter_str: &str,
+    n_lines: usize,
+    read_all: bool,
+) -> Result<()> {
     let (mut file, content) = get_tail_content(path, n_lines, read_all)?;
-    
+
     // Scan existing content for the filter
     let mut matching_lines = Vec::new();
     for line in content.lines() {
@@ -370,10 +418,10 @@ pub fn follow_file_filtered(path: &Path, filter_str: &str, n_lines: usize, read_
         }
     }
 
-    let start_line = if !read_all && matching_lines.len() > n_lines { 
-        matching_lines.len() - n_lines 
-    } else { 
-        0 
+    let start_line = if !read_all && matching_lines.len() > n_lines {
+        matching_lines.len() - n_lines
+    } else {
+        0
     };
 
     for line in &matching_lines[start_line..] {
@@ -395,7 +443,7 @@ pub fn follow_file_filtered(path: &Path, filter_str: &str, n_lines: usize, read_
             while let Some(idx) = partial_line.find('\n') {
                 let line: String = partial_line.drain(..idx + 1).collect();
                 let trimmed = line.trim_end();
-                
+
                 if trimmed.contains(filter_str) {
                     println!("{}", trimmed);
                 }

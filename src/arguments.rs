@@ -20,17 +20,6 @@ use clap::{Parser, Subcommand};
     Manage and view runit services
     Made specifically for Void Linux but should work anywhere
     Author: Dave Eddy <dave@daveeddy.com> (bahamas10)")]
-#[clap(
-    after_help = "All commands are implemented natively in Rust.
-Common subcommands:
-
-    start <service>           Start the service
-    stop <service>            Stop the service
-    restart <service>         Restart the service
-    reload <service>          Reload the service (send SIGHUP)
-    log <service>             View service logs (tail -f)
-"
-)]
 pub struct Args {
     /// Enable or disable color output.
     #[clap(short, long, value_name = "yes|no|auto")]
@@ -56,9 +45,6 @@ pub struct Args {
     #[clap(short, long)]
     pub user: bool,
 
-    /// Filter services by name (legacy argument).
-    pub filter: Option<String>,
-
     #[clap(subcommand)]
     pub command: Option<Commands>,
 }
@@ -83,6 +69,15 @@ pub enum Commands {
 
     /// Disable service(s).
     Disable { services: Vec<String> },
+
+    /// Add service(s) (symlink from /etc/sv).
+    Add { services: Vec<String> },
+
+    /// Remove service(s) (remove symlink).
+    Remove { services: Vec<String> },
+
+    /// List all available services in /etc/sv.
+    Avail,
 
     /// Start service(s) (up).
     Start { services: Vec<String> },

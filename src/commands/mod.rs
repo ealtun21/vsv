@@ -6,6 +6,7 @@
 
 //! Subcommands for `vsv`.
 
+pub mod add_remove;
 pub mod control;
 pub mod enable_disable;
 pub mod status;
