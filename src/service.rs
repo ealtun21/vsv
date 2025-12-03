@@ -26,34 +26,6 @@ pub enum ServiceState {
     Unknown,
 }
 
-impl ServiceState {
-    /// Get a suitable `yansi::Style` for the state.
-    pub fn get_style(&self) -> Style {
-        let style = Style::default();
-
-        let color = match self {
-            ServiceState::Run => Color::Green,
-            ServiceState::Down => Color::Red,
-            ServiceState::Finish => Color::Yellow,
-            ServiceState::Unknown => Color::Yellow,
-        };
-
-        style.fg(color)
-    }
-
-    /// Get a suitable char for the state (as a `String`).
-    pub fn get_char(&self) -> String {
-        let s = match self {
-            ServiceState::Run => "✔",
-            ServiceState::Down => "X",
-            ServiceState::Finish => "X",
-            ServiceState::Unknown => "?",
-        };
-
-        s.to_string()
-    }
-}
-
 impl fmt::Display for ServiceState {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let s = match self {

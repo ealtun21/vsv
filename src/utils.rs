@@ -9,7 +9,7 @@
 use libc::pid_t;
 use std::fs;
 use std::path::Path;
-use std::process::{Command, ExitStatus};
+use std::process::Command;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
@@ -107,22 +107,6 @@ where
 }
 
 /**
- * Run a program and get the exit status.
- */
-pub fn run_program_get_status<T1, T2>(
-    cmd: &T1,
-    args: &[T2],
-) -> Result<ExitStatus>
-where
-    T1: AsRef<str>,
-    T2: AsRef<str>,
-{
-    let p = make_command(cmd, args).status()?;
-
-    Ok(p)
-}
-
-/**
  * Create a `std::process::Command` from a given command name and argument
  * slice.
  */
@@ -193,4 +177,63 @@ pub fn trim_long_string(s: &str, limit: usize, suffix: &str) -> String {
         s.chars().take(limit - suffix_len).collect::<String>(),
         suffix
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_run_program_get_output_good_program_exit_success() -> Result<()> {
+        let cmd = "echo";
+        let args = ["hello", "world"];
+        let out = run_program_get_output(&cmd, &args)?;
+
+        assert_eq!(out, "hello world\n", "stdout is correct");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_run_program_get_output_good_program_exit_failure() -> Result<()> {
+        let cmd = "false";
+        let args: [&str; 0] = [];
+        let out = run_program_get_output(&cmd, &args);
+
+        assert!(out.is_err(), "program generates an error");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_run_program_get_output_bad_program() -> Result<()> {
+        let cmd = "this-command-should-never-exist---seriously";
+        let args: [&str; 0] = [];
+        let out = run_program_get_output(&cmd, &args);
+
+        assert!(out.is_err(), "program generates an error");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_relative_durations() {
+        use std::time::Duration;
+
+        let arr = [
+            (0, "0 seconds"),
+            (3, "3 seconds"),
+            (3 * 60, "3 minutes"),
+            (3 * 60 * 60, "3 hours"),
+            (3 * 60 * 60 * 24, "3 days"),
+            (3 * 60 * 60 * 24 * 7, "3 weeks"),
+            (3 * 60 * 60 * 24 * 30, "3 months"),
+            (3 * 60 * 60 * 24 * 365, "3 years"),
+        ];
+
+        for (secs, s) in arr {
+            let dur = Duration::new(secs, 0);
+            assert_eq!(relative_duration(&dur), s, "duration mismatch");
+        }
+    }
 }

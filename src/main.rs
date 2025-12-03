@@ -23,7 +23,8 @@ mod runit;
 mod service;
 mod utils;
 
-use config::{Config, ProgramMode};
+use arguments::Commands;
+use config::Config;
 use die::die;
 use utils::verbose;
 
@@ -53,17 +54,25 @@ fn do_main() -> Result<()> {
     check_root_permissions(&cfg);
 
     // figure out subcommand to run
-    match cfg.mode {
-        ProgramMode::Status => commands::status::do_status(&cfg),
-        ProgramMode::Enable => commands::enable_disable::do_enable(&cfg),
-        ProgramMode::Disable => commands::enable_disable::do_disable(&cfg),
-        ProgramMode::External => commands::external::do_external(&cfg),
+    if let Some(ref cmd) = args.command {
+        match cmd {
+            Commands::Status { .. } => commands::status::do_status(&cfg),
+            Commands::Enable { .. } => {
+                commands::enable_disable::do_enable(&cfg)
+            }
+            Commands::Disable { .. } => {
+                commands::enable_disable::do_disable(&cfg)
+            }
+            // Pass all other commands to the control handler
+            _ => commands::control::run(&cfg, cmd),
+        }
+    } else {
+        // Default to status if no command provided
+        commands::status::do_status(&cfg)
     }
 }
 
 fn check_root_permissions(cfg: &Config) {
-    // Only enforce root if we are using the default system directory.
-    // Users running vsv on their own home directory (vsv -u) should not be blocked.
     if cfg.svdir.to_str() == Some(config::DEFAULT_SVDIR) {
         let is_root = unsafe { libc::geteuid() } == 0;
         if !is_root {

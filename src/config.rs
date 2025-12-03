@@ -6,14 +6,9 @@
 
 /*!
  * Config context variable and various constants for vsv.
- *
- * The main idea here is that after CLI arguments are parsed by `clap` the args
- * object will be given to the config constructor via `::from_args(&args)` and
- * from that + ENV variables a config object will be created.
  */
 
 use std::env;
-use std::ffi::OsString;
 use std::fmt;
 use std::io;
 use std::io::IsTerminal;
@@ -22,12 +17,10 @@ use std::path::PathBuf;
 use anyhow::{bail, Context, Result};
 
 use crate::arguments::{Args, Commands};
-use crate::config;
 
 // default values
 pub const DEFAULT_SVDIR: &str = "/var/service";
 pub const DEFAULT_PROC_DIR: &str = "/proc";
-pub const DEFAULT_SV_PROG: &str = "sv";
 pub const DEFAULT_PSTREE_PROG: &str = "pstree";
 pub const DEFAULT_USER_DIR: &str = "runit/service";
 
@@ -35,7 +28,6 @@ pub const DEFAULT_USER_DIR: &str = "runit/service";
 pub const ENV_NO_COLOR: &str = "NO_COLOR";
 pub const ENV_SVDIR: &str = "SVDIR";
 pub const ENV_PROC_DIR: &str = "PROC_DIR";
-pub const ENV_SV_PROG: &str = "SV_PROG";
 pub const ENV_PSTREE_PROG: &str = "PSTREE_PROG";
 
 /// vsv execution modes (subcommands).
@@ -44,7 +36,7 @@ pub enum ProgramMode {
     Status,
     Enable,
     Disable,
-    External,
+    Control,
 }
 
 impl fmt::Display for ProgramMode {
@@ -53,111 +45,92 @@ impl fmt::Display for ProgramMode {
             ProgramMode::Status => "status",
             ProgramMode::Enable => "enable",
             ProgramMode::Disable => "disable",
-            ProgramMode::External => "<external>",
+            ProgramMode::Control => "control",
         };
-
         s.fmt(f)
     }
 }
 
-/**
- * Configuration options derived from the environment and CLI arguments.
- *
- * This struct holds all configuration data for the invocation of `vsv` derived
- * from both env variables and CLI arguments.  This object can be passed around
- * and thought of as a "context" variable.
- */
 #[derive(Debug)]
 pub struct Config {
-    // env vars only
-    pub proc_path: PathBuf,
-    pub sv_prog: String,
-    pub pstree_prog: String,
-
-    // env vars or CLI options
+    pub mode: ProgramMode,
     pub colorize: bool,
     pub svdir: PathBuf,
-
-    // CLI options only
     pub tree: bool,
     pub log: bool,
     pub verbose: u8,
     pub operands: Vec<String>,
-    pub mode: ProgramMode,
+    pub proc_path: PathBuf,
+    pub pstree_prog: String,
 }
 
 impl Config {
-    /// Create a `Config` struct from a clap `Args` struct.
     pub fn from_args(args: &Args) -> Result<Self> {
         let mut tree = args.tree;
         let mut log = args.log;
+        let mut operands = vec![];
 
-        let proc_path: PathBuf = env::var_os(config::ENV_PROC_DIR)
-            .unwrap_or_else(|| OsString::from(DEFAULT_PROC_DIR))
-            .into();
-        let sv_prog = env::var(config::ENV_SV_PROG)
-            .unwrap_or_else(|_| DEFAULT_SV_PROG.to_string());
-        let pstree_prog = env::var(config::ENV_PSTREE_PROG)
-            .unwrap_or_else(|_| DEFAULT_PSTREE_PROG.to_string());
+        let mode = match &args.command {
+            Some(Commands::Status { tree: t, log: l, filter }) => {
+                if *t {
+                    tree = true;
+                }
+                if *l {
+                    log = true;
+                }
+                operands = filter.to_vec();
+                ProgramMode::Status
+            }
+            Some(Commands::Enable { services }) => {
+                operands = services.to_vec();
+                ProgramMode::Enable
+            }
+            Some(Commands::Disable { services }) => {
+                operands = services.to_vec();
+                ProgramMode::Disable
+            }
+            // Map all control commands to ProgramMode::Control
+            Some(Commands::Start { services })
+            | Some(Commands::Stop { services })
+            | Some(Commands::Restart { services })
+            | Some(Commands::Reload { services })
+            | Some(Commands::Once { services })
+            | Some(Commands::Pause { services })
+            | Some(Commands::Cont { services })
+            | Some(Commands::Hup { services })
+            | Some(Commands::Alarm { services })
+            | Some(Commands::Interrupt { services })
+            | Some(Commands::Quit { services })
+            | Some(Commands::Term { services })
+            | Some(Commands::Kill { services })
+            | Some(Commands::Exit { services }) => {
+                operands = services.to_vec();
+                ProgramMode::Control
+            }
+            None => ProgramMode::Status,
+        };
 
         let colorize = should_colorize_output(&args.color)?;
         let svdir = get_svdir(&args.dir, args.user)?;
         let verbose = args.verbose;
 
-        // let arguments after `vsv status` work as well.
-        if let Some(Commands::Status { tree: _tree, log: _log, filter: _ }) =
-            &args.command
-        {
-            if *_tree {
-                tree = true;
-            }
-            if *_log {
-                log = true;
-            }
-        };
+        let proc_path = env::var_os(ENV_PROC_DIR)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(DEFAULT_PROC_DIR));
 
-        // figure out subcommand to run
-        let (mode, operands) = match &args.command {
-            // `vsv` (no subcommand)
-            None => {
-                let v: Vec<String> = vec![];
-                (ProgramMode::Status, v)
-            }
-            // `vsv status`
-            Some(Commands::Status { tree: _, log: _, filter: operands }) => {
-                (ProgramMode::Status, operands.to_vec())
-            }
-            // `vsv enable ...`
-            Some(Commands::Enable { services }) => {
-                (ProgramMode::Enable, services.to_vec())
-            }
-            // `vsv disable ...`
-            Some(Commands::Disable { services }) => {
-                (ProgramMode::Disable, services.to_vec())
-            }
-            // `vsv <anything> ...`
-            Some(Commands::External(args)) => {
-                // -t or -l will put the program into status mode
-                let mode = if tree || log {
-                    ProgramMode::Status
-                } else {
-                    ProgramMode::External
-                };
-                (mode, args.to_vec())
-            }
-        };
+        let pstree_prog = env::var(ENV_PSTREE_PROG)
+            .unwrap_or_else(|_| DEFAULT_PSTREE_PROG.to_string());
 
         let o = Self {
-            proc_path,
-            sv_prog,
-            pstree_prog,
+            mode,
             colorize,
             svdir,
             tree,
             log,
             verbose,
             operands,
-            mode,
+            proc_path,
+            pstree_prog,
         };
 
         Ok(o)
@@ -166,13 +139,6 @@ impl Config {
 
 /**
  * Check if the output should be colorized.
- *
- * Coloring output goes in order from highest priority to lowest priority
- * -highest priority (first in this list) wins:
- *
- * 1. CLI option (`-c`) given.
- * 2. env `NO_COLOR` given.
- * 3. stdout is a tty.
  */
 fn should_colorize_output(color_arg: &Option<String>) -> Result<bool> {
     // check CLI option first
@@ -186,7 +152,7 @@ fn should_colorize_output(color_arg: &Option<String>) -> Result<bool> {
     }
 
     // check env var next
-    if env::var_os(config::ENV_NO_COLOR).is_some() {
+    if env::var_os(ENV_NO_COLOR).is_some() {
         return Ok(false);
     }
 
@@ -198,13 +164,6 @@ fn should_colorize_output(color_arg: &Option<String>) -> Result<bool> {
 
 /**
  * Determine the `SVDIR` the user wants.
- *
- * Check svdir in this order:
- *
- * 1. CLI option (`-d`) given
- * 2. CLI option (`-u`) given
- * 3. env `SVDIR` given
- * 4. use `DEFAULT_SVDIR` (`"/var/service"`)
  */
 fn get_svdir(dir_arg: &Option<PathBuf>, user_arg: bool) -> Result<PathBuf> {
     // `-d <dir>`
@@ -214,16 +173,16 @@ fn get_svdir(dir_arg: &Option<PathBuf>, user_arg: bool) -> Result<PathBuf> {
 
     // `-u`
     if user_arg {
-        let home_dir = dirs::home_dir()
-            .context("failed to determine users home directory")?;
-        let buf = home_dir.join(DEFAULT_USER_DIR);
-        return Ok(buf);
+        let home = env::var_os("HOME").context("env HOME not set")?;
+        let path = PathBuf::from(home).join(DEFAULT_USER_DIR);
+        return Ok(path);
     }
 
-    // env or default
-    let svdir = env::var_os(config::ENV_SVDIR)
-        .unwrap_or_else(|| OsString::from(config::DEFAULT_SVDIR));
-    let buf = PathBuf::from(&svdir);
+    // env `SVDIR`
+    if let Some(dir) = env::var_os(ENV_SVDIR) {
+        return Ok(PathBuf::from(dir));
+    }
 
-    Ok(buf)
+    // default
+    Ok(PathBuf::from(DEFAULT_SVDIR))
 }

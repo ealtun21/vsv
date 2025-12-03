@@ -20,17 +20,6 @@ use clap::{ArgAction, Parser, Subcommand};
     Manage and view runit services
     Made specifically for Void Linux but should work anywhere
     Author: Dave Eddy <dave@daveeddy.com> (bahamas10)")]
-#[clap(
-    after_help = "Any other subcommand gets passed directly to the 'sv' command, see sv(1) for
-the full list of subcommands and information about what each does specifically.
-Common subcommands:
-
-    start <service>           Start the service
-    stop <service>            Stop the service
-    restart <service>         Restart the service
-    reload <service>          Reload the service (send SIGHUP)
-"
-)]
 pub struct Args {
     /// Enable or disable color output.
     #[clap(short, long, value_name = "yes|no|auto")]
@@ -82,9 +71,47 @@ pub enum Commands {
     /// Disable service(s).
     Disable { services: Vec<String> },
 
-    /// Pass arguments directly to `sv`.
-    #[clap(external_subcommand)]
-    External(Vec<String>),
+    /// Start service(s) (up).
+    Start { services: Vec<String> },
+
+    /// Stop service(s) (down).
+    Stop { services: Vec<String> },
+
+    /// Restart service(s) (term, cont, up).
+    Restart { services: Vec<String> },
+
+    /// Reload service(s) (send SIGHUP).
+    Reload { services: Vec<String> },
+
+    /// Start if service is not running. Do not restart if it stops (once).
+    Once { services: Vec<String> },
+
+    /// Send SIGSTOP (pause).
+    Pause { services: Vec<String> },
+
+    /// Send SIGCONT (continue).
+    Cont { services: Vec<String> },
+
+    /// Send SIGHUP.
+    Hup { services: Vec<String> },
+
+    /// Send SIGALRM.
+    Alarm { services: Vec<String> },
+
+    /// Send SIGINT.
+    Interrupt { services: Vec<String> },
+
+    /// Send SIGQUIT.
+    Quit { services: Vec<String> },
+
+    /// Send SIGTERM.
+    Term { services: Vec<String> },
+
+    /// Send SIGKILL.
+    Kill { services: Vec<String> },
+
+    /// Send SIGTERM and exit (exit).
+    Exit { services: Vec<String> },
 }
 
 pub fn parse() -> Args {

@@ -10,8 +10,10 @@ use libc::pid_t;
 use path::{Path, PathBuf};
 use std::convert::TryInto;
 use std::fs;
+use std::fs::OpenOptions;
 use std::io;
 use std::io::Read;
+use std::io::Write;
 use std::path;
 use std::time;
 
@@ -26,6 +28,42 @@ pub enum RunitServiceState {
     Unknown,
 }
 
+/// Control commands (merged from rsv logic)
+#[derive(Debug, Copy, Clone)]
+pub enum RunitCommand {
+    Up,
+    Down,
+    Once,
+    Pause,
+    Cont,
+    Hup,
+    Alarm,
+    Interrupt,
+    Quit,
+    Term,
+    Kill,
+    Exit,
+}
+
+impl RunitCommand {
+    pub fn to_char(&self) -> char {
+        match self {
+            RunitCommand::Up => 'u',
+            RunitCommand::Down => 'd',
+            RunitCommand::Once => 'o',
+            RunitCommand::Pause => 'p',
+            RunitCommand::Cont => 'c',
+            RunitCommand::Hup => 'h',
+            RunitCommand::Alarm => 'a',
+            RunitCommand::Interrupt => 'i',
+            RunitCommand::Quit => 'q',
+            RunitCommand::Term => 't',
+            RunitCommand::Kill => 'k',
+            RunitCommand::Exit => 'x',
+        }
+    }
+}
+
 /// Struct representing the parsed binary status
 #[derive(Debug)]
 pub struct RunitStatus {
@@ -38,9 +76,6 @@ pub struct RunitStatus {
 
 /**
  * A runit service.
- *
- * This struct defines an object that can represent an individual service for
- * Runit.
  */
 #[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct RunitService {
@@ -59,41 +94,52 @@ impl RunitService {
     /// Check if service is valid.
     pub fn valid(&self) -> bool {
         let p = self.path.join("supervise");
-
         p.exists()
     }
 
     /// Check if a service is enabled.
     pub fn enabled(&self) -> bool {
-        // "/<svdir>/<service>/down"
         let p = self.path.join("down");
-
         !p.exists()
     }
 
     /// Enable the service.
     pub fn enable(&self) -> Result<()> {
-        // "/<svdir>/<service>/down"
         let p = self.path.join("down");
-
         if let Err(err) = fs::remove_file(p) {
-            // allow ENOENT to be considered success as well
             match err.kind() {
                 io::ErrorKind::NotFound => return Ok(()),
                 _ => return Err(err.into()),
             };
         };
-
         Ok(())
     }
 
     /// Disable the service.
     pub fn disable(&self) -> Result<()> {
-        // "/<svdir>/<service>/down"
         let p = self.path.join("down");
-
         fs::File::create(p)?;
+        Ok(())
+    }
 
+    /// Send a control command to the service pipe.
+    pub fn control(&self, cmd: RunitCommand) -> Result<()> {
+        let pipe_path = self.path.join("supervise").join("control");
+
+        // rsv checks for supervise/ok, but supervise/control existing usually implies ok.
+        if !pipe_path.exists() {
+            return Err(anyhow!(
+                "control pipe does not exist (service not supervised?)"
+            ));
+        }
+
+        let mut f =
+            OpenOptions::new().write(true).open(&pipe_path).with_context(
+                || format!("failed to open control pipe {:?}", pipe_path),
+            )?;
+
+        let c = cmd.to_char();
+        f.write_all(&[c as u8])?;
         Ok(())
     }
 
@@ -104,7 +150,6 @@ impl RunitService {
         let mut buf = [0u8; 20];
         f.read_exact(&mut buf)?;
 
-        // Byte 19: State (0: Down, 1: Run, 2: Finish)
         let state = match buf[19] {
             0 => RunitServiceState::Down,
             1 => RunitServiceState::Run,
@@ -112,18 +157,12 @@ impl RunitService {
             _ => RunitServiceState::Unknown,
         };
 
-        // Bytes 12-15: PID (Little Endian)
         let pid_raw = u32::from_le_bytes(buf[12..16].try_into()?);
         let pid = if pid_raw > 0 { Some(pid_raw as pid_t) } else { None };
 
-        // Byte 16: Paused
         let paused = buf[16] == 1;
-
-        // Byte 17: Want ('u': up, 'd': down)
         let want = buf[17] as char;
 
-        // Bytes 0-7: TAI64 Timestamp (Big Endian)
-        // TAI64 is 64-bit seconds. Runit uses an offset of 4611686018427387914ULL
         let tai = u64::from_be_bytes(buf[0..8].try_into()?);
         let offset = 4611686018427387914u64;
 
@@ -140,13 +179,6 @@ impl RunitService {
 
 /**
  * List the services in a given runit service directory.
- *
- * This function optionally allows you to specify the `log` boolean.  If set,
- * this will return the correponding log service for each base-level service
- * found.
- *
- * You may also specify an optional filter to only allow services that contain a
- * given string.
  */
 pub fn get_services<T>(
     path: &Path,
@@ -156,7 +188,6 @@ pub fn get_services<T>(
 where
     T: AsRef<str>,
 {
-    // loop services directory and collect service names
     let mut dirs = Vec::new();
 
     for entry in fs::read_dir(path)
@@ -187,7 +218,6 @@ where
 
         if log {
             let p = entry.path().join("log");
-            // Only add the log service if the directory actually exists
             if p.exists() {
                 let name = "- log";
                 let service = RunitService::new(name, &p);
