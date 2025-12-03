@@ -48,41 +48,54 @@ pub fn format_status_line<T: AsRef<str>>(
     log: (T, Style),
 ) -> String {
     // ( data + style to print, max width, suffix )
+    // We add a "  " suffix to enforce a gap between columns.
     let data = [
-        (status_char.0.as_ref(), status_char.1, 1, ""),
-        (name.0.as_ref(), name.1, 20, ""),
-        (state.0.as_ref(), state.1, 7, ""),
-        (enabled.0.as_ref(), enabled.1, 9, ""),
-        (pid.0.as_ref(), pid.1, 8, ""),
-        (command.0.as_ref(), command.1, 17, ""),
-        (time.0.as_ref(), time.1, 9, ""),
-        (log.0.as_ref(), log.1, 7, ""),
+        (status_char.0.as_ref(), status_char.1, 1, "  "),
+        (name.0.as_ref(), name.1, 20, "  "),
+        (state.0.as_ref(), state.1, 7, "  "),
+        (enabled.0.as_ref(), enabled.1, 9, "  "),
+        (pid.0.as_ref(), pid.1, 8, "  "),
+        (command.0.as_ref(), command.1, 17, "  "),
+        (time.0.as_ref(), time.1, 9, "  "),
+        (log.0.as_ref(), log.1, 7, ""), // Last column has no suffix
     ];
 
     let mut line = String::new();
 
-    for (i, (s, style, width, suffix)) in data.iter().enumerate() {
+    for (_i, (s, style, width, suffix)) in data.iter().enumerate() {
         let mut s = s.to_string();
+        let char_count = s.chars().count();
 
-        // truncate long strings
-        if s.len() > *width {
-            s.truncate(*width);
+        // truncate long strings safely (by character count, not bytes)
+        if char_count > *width {
+             // Find the byte index where the *width*-th character starts
+             if let Some((idx, _)) = s.char_indices().nth(*width) {
+                 s.truncate(idx);
+             }
         }
+
+        // Recalculate char_count after truncation for padding logic
+        let char_count = s.chars().count();
 
         // construct the string with the style
-        let s = s.paint(*style).to_string();
+        let s_painted = s.paint(*style).to_string();
 
-        // calculate the padding
-        let padding = width - s.len() + (s.len() - s.chars().count());
-
-        // append to the line
-        if i == 0 {
-            line.push_str(&s);
+        // calculate the padding safely
+        // We want 'width' visual columns.
+        let padding = if *width > char_count {
+            *width - char_count
         } else {
-            line.push_str(&format!("{:>width$}", s, width = padding + s.len()));
-        }
+            0
+        };
 
-        // append the suffix
+        // Left Align: String first, then Padding
+        // This ensures headers ("SERVICE") and values ("NetworkManager") start 
+        // at the same column.
+        line.push_str(&s_painted);
+        let pad_str = " ".repeat(padding);
+        line.push_str(&pad_str);
+
+        // append the suffix (the gap)
         line.push_str(suffix);
     }
 
@@ -423,6 +436,8 @@ pub fn follow_file_filtered(
         }
     }
 }
+
+// --- NEW COMPLETION UTILS ---
 
 /**
  * Get a list of service names in a directory.

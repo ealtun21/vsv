@@ -16,8 +16,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use clap::{Command, CommandFactory};
 use clap::builder::{PossibleValue, PossibleValuesParser};
+use clap::{Command, CommandFactory};
 use clap_complete::env::CompleteEnv;
 use yansi::Paint;
 
@@ -45,21 +45,36 @@ fn build_cli_with_completions() -> Command {
 
     // 2. Attach running services to standard commands (using "services" argument)
     let running_svc_cmds = [
-        "start", "stop", "restart", "reload", "once", "pause", 
-        "cont", "hup", "alarm", "interrupt", "quit", "term", "kill", 
-        "exit", "remove", "enable", "disable"
+        "start",
+        "stop",
+        "restart",
+        "reload",
+        "once",
+        "pause",
+        "cont",
+        "hup",
+        "alarm",
+        "interrupt",
+        "quit",
+        "term",
+        "kill",
+        "exit",
+        "remove",
+        "enable",
+        "disable",
     ];
 
     for sub_name in running_svc_cmds {
         // Clone the services list for this subcommand closure
         let values = running_services.clone();
-        
+
         // We use `move` to transfer ownership of `values` into the closure
         cmd = cmd.mut_subcommand(sub_name, move |sub| {
             sub.mut_arg("services", move |arg| {
                 // Fix: explicit map to PossibleValue with leaked static lifetime
                 let vals = values.iter().map(|s| {
-                    let static_str: &'static str = Box::leak(s.clone().into_boxed_str());
+                    let static_str: &'static str =
+                        Box::leak(s.clone().into_boxed_str());
                     PossibleValue::new(static_str)
                 });
                 arg.value_parser(PossibleValuesParser::new(vals))
@@ -73,7 +88,8 @@ fn build_cli_with_completions() -> Command {
         cmd = cmd.mut_subcommand("log", move |sub| {
             sub.mut_arg("service", move |arg| {
                 let vals = values.iter().map(|s| {
-                    let static_str: &'static str = Box::leak(s.clone().into_boxed_str());
+                    let static_str: &'static str =
+                        Box::leak(s.clone().into_boxed_str());
                     PossibleValue::new(static_str)
                 });
                 arg.value_parser(PossibleValuesParser::new(vals))
@@ -87,14 +103,15 @@ fn build_cli_with_completions() -> Command {
         cmd = cmd.mut_subcommand("add", move |sub| {
             sub.mut_arg("services", move |arg| {
                 let vals = values.iter().map(|s| {
-                    let static_str: &'static str = Box::leak(s.clone().into_boxed_str());
+                    let static_str: &'static str =
+                        Box::leak(s.clone().into_boxed_str());
                     PossibleValue::new(static_str)
                 });
                 arg.value_parser(PossibleValuesParser::new(vals))
             })
         });
     }
-    
+
     cmd
 }
 
@@ -114,7 +131,7 @@ fn do_main() -> Result<()> {
     if let Some(Commands::Completions { shell }) = &args.command {
         let bin_name = env!("CARGO_PKG_NAME");
         let shell_name = shell.to_string();
-        
+
         match shell {
             clap_complete::Shell::Bash => {
                 println!("source <(COMPLETE=bash {})", bin_name);
@@ -126,7 +143,10 @@ fn do_main() -> Result<()> {
                 println!("COMPLETE=fish {} | source", bin_name);
             }
             _ => {
-                println!("# Dynamic completion not fully tested for {}. Try:", shell_name);
+                println!(
+                    "# Dynamic completion not fully tested for {}. Try:",
+                    shell_name
+                );
                 println!("source <(COMPLETE={} {})", shell_name, bin_name);
             }
         }
